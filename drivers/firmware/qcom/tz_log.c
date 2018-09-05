@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -54,6 +54,15 @@
  */
 #define TZBSP_MAX_INT_DESC 16
 /*
+ * TZ 3.X version info
+ */
+#define QSEE_VERSION_TZ_3_X 0x800000
+
+#define TZBSP_AES_256_ENCRYPTED_KEY_SIZE 256
+#define TZBSP_NONCE_LEN 12
+#define TZBSP_TAG_LEN 16
+
+/*
  * VMID Table
  */
 struct tzdbg_vmid_t {
@@ -70,6 +79,19 @@ struct tzdbg_boot_info_t {
 	uint32_t pc_exit_cnt;	/* Power Collapse exit CPU counter */
 	uint32_t warm_jmp_addr;	/* Last Warmboot Jump Address */
 	uint32_t spare;	/* Reserved for future use. */
+};
+/*
+ * Boot Info Table for 64-bit
+ */
+struct tzdbg_boot_info64_t {
+	uint32_t wb_entry_cnt;  /* Warmboot entry CPU Counter */
+	uint32_t wb_exit_cnt;   /* Warmboot exit CPU Counter */
+	uint32_t pc_entry_cnt;  /* Power Collapse entry CPU Counter */
+	uint32_t pc_exit_cnt;   /* Power Collapse exit CPU counter */
+	uint32_t psci_entry_cnt;/* PSCI syscall entry CPU Counter */
+	uint32_t psci_exit_cnt;   /* PSCI syscall exit CPU Counter */
+	uint64_t warm_jmp_addr; /* Last Warmboot Jump Address */
+	uint32_t warm_jmp_instr; /* Last Warmboot Jump Address Instruction */
 };
 /*
  * Reset Info Table
@@ -106,6 +128,14 @@ struct tzdbg_int_t {
 	 */
 	uint8_t int_desc[TZBSP_MAX_INT_DESC];
 	uint64_t int_count[TZBSP_MAX_CPU_COUNT]; /* # of times seen per CPU */
+};
+
+/* warm boot reason for cores */
+struct tzbsp_diag_wakeup_info_t {
+	/* Wake source info : APCS_GICC_HPPIR */
+	uint32_t HPPIR;
+	/* Wake source info : APCS_GICC_AHPPIR */
+	uint32_t AHPPIR;
 };
 
 /*
@@ -162,6 +192,10 @@ struct tzdbg_t {
 	 * Ring Buffer Length
 	 */
 	uint32_t ring_len;
+
+	/* Offset for Wakeup info */
+	uint32_t wakeup_info_off;
+
 	/*
 	 * VMID to EE Mapping
 	 */
@@ -176,6 +210,16 @@ struct tzdbg_t {
 	struct tzdbg_reset_info_t reset_info[TZBSP_MAX_CPU_COUNT];
 	uint32_t num_interrupts;
 	struct tzdbg_int_t  int_info[TZBSP_DIAG_INT_NUM];
+
+	/* Wake up info */
+	struct tzbsp_diag_wakeup_info_t  wakeup_info[TZBSP_MAX_CPU_COUNT];
+
+	uint8_t key[TZBSP_AES_256_ENCRYPTED_KEY_SIZE];
+
+	uint8_t nonce[TZBSP_NONCE_LEN];
+
+	uint8_t tag[TZBSP_TAG_LEN];
+
 	/*
 	 * We need at least 2K for the ring buffer
 	 */
@@ -318,30 +362,90 @@ static int _disp_tz_boot_stats(void)
 {
 	int i;
 	int len = 0;
-	struct tzdbg_boot_info_t *ptr;
+	struct tzdbg_boot_info_t *ptr = NULL;
+	struct tzdbg_boot_info64_t *ptr_64 = NULL;
+	int ret = 0;
+	uint32_t smc_id = 0;
+	uint32_t feature = 10;
+	struct qseecom_command_scm_resp resp = {};
+	struct scm_desc desc = {0};
 
-	ptr = (struct tzdbg_boot_info_t *)((unsigned char *)tzdbg.diag_buf +
-					tzdbg.diag_buf->boot_info_off);
+	if (!is_scm_armv8()) {
+		ret = scm_call(SCM_SVC_INFO, SCM_SVC_UTIL,  &feature,
+					sizeof(feature), &resp, sizeof(resp));
+	} else {
+		smc_id = TZ_INFO_GET_FEATURE_VERSION_ID;
+		desc.arginfo = TZ_INFO_GET_FEATURE_VERSION_ID_PARAM_ID;
+		desc.args[0] = feature;
+		ret = scm_call2(smc_id, &desc);
+		resp.result = desc.ret[0];
+	}
+
+	if (ret) {
+		pr_err("%s: scm_call to register log buffer failed\n",
+				__func__);
+		return 0;
+	}
+	pr_info("qsee_version = 0x%x\n", resp.result);
+
+	if (resp.result >= QSEE_VERSION_TZ_3_X) {
+		ptr_64 = (struct tzdbg_boot_info64_t *)((unsigned char *)
+			tzdbg.diag_buf + tzdbg.diag_buf->boot_info_off);
+	} else {
+		ptr = (struct tzdbg_boot_info_t *)((unsigned char *)
+			tzdbg.diag_buf + tzdbg.diag_buf->boot_info_off);
+	}
 
 	for (i = 0; i < tzdbg.diag_buf->cpu_count; i++) {
-		len += snprintf(tzdbg.disp_buf + len,
-				(debug_rw_buf_size - 1) - len,
-				"  CPU #: %d\n"
-				"     Warmboot jump address     : 0x%x\n"
-				"     Warmboot entry CPU counter: 0x%x\n"
-				"     Warmboot exit CPU counter : 0x%x\n"
-				"     Power Collapse entry CPU counter: 0x%x\n"
-				"     Power Collapse exit CPU counter : 0x%x\n",
-				i, ptr->warm_jmp_addr, ptr->wb_entry_cnt,
-				ptr->wb_exit_cnt, ptr->pc_entry_cnt,
-				ptr->pc_exit_cnt);
+		if (resp.result >= QSEE_VERSION_TZ_3_X) {
+			len += snprintf(tzdbg.disp_buf + len,
+					(debug_rw_buf_size - 1) - len,
+					"  CPU #: %d\n"
+					"     Warmboot jump address : 0x%llx\n"
+					"     Warmboot entry CPU counter : 0x%x\n"
+					"     Warmboot exit CPU counter : 0x%x\n"
+					"     Power Collapse entry CPU counter : 0x%x\n"
+					"     Power Collapse exit CPU counter : 0x%x\n"
+					"     Psci entry CPU counter : 0x%x\n"
+					"     Psci exit CPU counter : 0x%x\n"
+					"     Warmboot Jump Address Instruction : 0x%x\n",
+					i, (uint64_t)ptr_64->warm_jmp_addr,
+					ptr_64->wb_entry_cnt,
+					ptr_64->wb_exit_cnt,
+					ptr_64->pc_entry_cnt,
+					ptr_64->pc_exit_cnt,
+					ptr_64->psci_entry_cnt,
+					ptr_64->psci_exit_cnt,
+					ptr_64->warm_jmp_instr);
 
-		if (len > (debug_rw_buf_size - 1)) {
-			pr_warn("%s: Cannot fit all info into the buffer\n",
-								__func__);
-			break;
+			if (len > (debug_rw_buf_size - 1)) {
+				pr_warn("%s: Cannot fit all info into the buffer\n",
+						__func__);
+				break;
+			}
+			ptr_64++;
+		} else {
+			len += snprintf(tzdbg.disp_buf + len,
+					(debug_rw_buf_size - 1) - len,
+					"  CPU #: %d\n"
+					"     Warmboot jump address     : 0x%x\n"
+					"     Warmboot entry CPU counter: 0x%x\n"
+					"     Warmboot exit CPU counter : 0x%x\n"
+					"     Power Collapse entry CPU counter: 0x%x\n"
+					"     Power Collapse exit CPU counter : 0x%x\n",
+					i, ptr->warm_jmp_addr,
+					ptr->wb_entry_cnt,
+					ptr->wb_exit_cnt,
+					ptr->pc_entry_cnt,
+					ptr->pc_exit_cnt);
+
+			if (len > (debug_rw_buf_size - 1)) {
+				pr_warn("%s: Cannot fit all info into the buffer\n",
+						__func__);
+				break;
+			}
+			ptr++;
 		}
-		ptr++;
 	}
 	tzdbg.stat[TZDBG_BOOT].data = tzdbg.disp_buf;
 	return len;
@@ -657,10 +761,16 @@ static ssize_t tzdbgfs_read(struct file *file, char __user *buf,
 	int len = 0;
 	int *tz_id =  file->private_data;
 
-	memcpy_fromio((void *)tzdbg.diag_buf, tzdbg.virt_iobase,
+	if (*tz_id == TZDBG_BOOT || *tz_id == TZDBG_RESET ||
+		*tz_id == TZDBG_INTERRUPT || *tz_id == TZDBG_GENERAL ||
+		*tz_id == TZDBG_VMID || *tz_id == TZDBG_LOG)
+		memcpy_fromio((void *)tzdbg.diag_buf, tzdbg.virt_iobase,
 						debug_rw_buf_size);
-	memcpy_fromio((void *)tzdbg.hyp_diag_buf, tzdbg.hyp_virt_iobase,
+
+	if (*tz_id == TZDBG_HYP_GENERAL || *tz_id == TZDBG_HYP_LOG)
+		memcpy_fromio((void *)tzdbg.hyp_diag_buf, tzdbg.hyp_virt_iobase,
 					tzdbg.hyp_debug_rw_buf_size);
+
 	switch (*tz_id) {
 	case TZDBG_BOOT:
 		len = _disp_tz_boot_stats();
@@ -824,6 +934,12 @@ static int  tzdbgfs_init(struct platform_device *pdev)
 
 	for (i = 0; i < TZDBG_STATS_MAX; i++) {
 		tzdbg.debug_tz[i] = i;
+		/* Do not create hyp entries in debugfs when hyplog flag is not
+		   enabled in dtsi. */
+		if (!tzdbg.is_hyplog_enabled &&
+		    ((TZDBG_HYP_LOG == tzdbg.debug_tz[i]) ||
+		     (TZDBG_HYP_GENERAL == tzdbg.debug_tz[i])))
+			continue;
 		dent = debugfs_create_file(tzdbg.stat[i].name,
 				S_IRUGO, dent_dir,
 				&tzdbg.debug_tz[i], &tzdbg_fops);
@@ -1026,6 +1142,7 @@ static struct platform_driver tz_log_driver = {
 		.name = "tz_log",
 		.owner = THIS_MODULE,
 		.of_match_table = tzlog_match,
+		.probe_type = PROBE_PREFER_ASYNCHRONOUS,
 	},
 };
 

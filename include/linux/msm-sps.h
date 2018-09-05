@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -117,6 +117,8 @@
 #define SPS_BAM_HOLD_MEM            (1UL << 8)
 /* Use cached write pointer */
 #define SPS_BAM_CACHED_WP           (1UL << 10)
+/* Reset BAM with pipes connected */
+#define SPS_BAM_FORCE_RESET         (1UL << 11)
 
 /* BAM device management flags */
 
@@ -1621,7 +1623,7 @@ static inline int sps_bam_process_irq(unsigned long dev)
 }
 
 static inline int sps_get_bam_addr(unsigned long dev, phys_addr_t *base,
-				u32 *size);
+				u32 *size)
 {
 	return -EPERM;
 }

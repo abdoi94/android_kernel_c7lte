@@ -660,6 +660,77 @@ EXIT:
 		__func__, buf, (int)strnlen(buf, sizeof(buf)), sec->cmd_state);
 }
 
+/**
+ * Command : Run jitter test
+ */
+static void cmd_run_test_jitter(void *device_data)
+{
+	struct sec_cmd_data *sec = (struct sec_cmd_data *)device_data;
+	struct mms_ts_info *info = container_of(sec, struct mms_ts_info, sec);
+	char buf[64] = { 0 };
+
+	int min = 999999;
+	int max = -999999;
+	int i = 0;
+
+	sec_cmd_set_default_result(sec);
+
+	if (mms_run_test(info, MIP_TEST_TYPE_CM_JITTER)) {
+		sprintf(buf, "%s", "NG");
+		sec->cmd_state = SEC_CMD_STATUS_FAIL;
+		goto EXIT;
+	}
+
+	for (i = 0; i < (info->node_x * info->node_y); i++) {
+		if (info->image_buf[i] > max) {
+			max = info->image_buf[i];
+		}
+		if (info->image_buf[i] < min) {
+			min = info->image_buf[i];
+		}
+	}
+
+	sprintf(buf, "%d,%d", min, max);
+	sec->cmd_state = SEC_CMD_STATUS_OK;
+
+EXIT:
+	sec_cmd_set_cmd_result(sec, buf, strnlen(buf, sizeof(buf)));
+	input_dbg(true, &info->client->dev, "%s - cmd[%s] len[%d] state[%d]\n",
+		__func__, buf, (int)strnlen(buf, sizeof(buf)), sec->cmd_state);
+}
+
+/**
+ * Command : Get result of jitter test
+ */
+static void cmd_get_jitter(void *device_data)
+{
+	struct sec_cmd_data *sec = (struct sec_cmd_data *)device_data;
+	struct mms_ts_info *info = container_of(sec, struct mms_ts_info, sec);
+	char buf[64] = { 0 };
+
+	int x = sec->cmd_param[0];
+	int y = sec->cmd_param[1];
+	int idx = 0;
+
+	sec_cmd_set_default_result(sec);
+
+	if ((x < 0) || (x >= info->node_x) || (y < 0) || (y >= info->node_y)) {
+		sprintf(buf, "%s", "NG");
+		sec->cmd_state = SEC_CMD_STATUS_FAIL;
+		goto EXIT;
+	}
+
+	idx = y * info->node_x + x;
+
+	sprintf(buf, "%d", info->image_buf[idx]);
+	sec->cmd_state = SEC_CMD_STATUS_OK;
+
+EXIT:
+	sec_cmd_set_cmd_result(sec, buf, strnlen(buf, sizeof(buf)));
+	input_dbg(true, &info->client->dev, "%s - cmd[%s] len[%d] state[%d]\n",
+		__func__, buf, (int)strnlen(buf, sizeof(buf)), sec->cmd_state);
+}
+
 static void cmd_get_threshold(void *device_data)
 {
 	struct sec_cmd_data *sec = (struct sec_cmd_data *)device_data;
@@ -954,6 +1025,140 @@ out:
 	input_info(true, &client->dev, "%s: %s\n", __func__, buf);
 }
 
+static void aod_enable(void *device_data)
+{
+	struct sec_cmd_data *sec = (struct sec_cmd_data *)device_data;
+	struct mms_ts_info *info = container_of(sec, struct mms_ts_info, sec);
+	struct i2c_client *client = info->client;
+	char buf[SEC_CMD_STR_LEN] = { 0 };
+
+	sec_cmd_set_default_result(sec);
+
+	if (!info->dtdata->support_lpm) {
+		input_err(true, &info->client->dev, "%s not supported\n", __func__);
+		snprintf(buf, sizeof(buf), "%s", NAME_OF_UNKNOWN_CMD);
+		sec->cmd_state = SEC_CMD_STATUS_NOT_APPLICABLE;
+		goto out;
+	}
+
+	if (sec->cmd_param[0]) {
+		info->lowpower_mode = true;
+		info->lowpower_flag = info->lowpower_flag | MMS_LPM_FLAG_AOD;
+	} else {
+		info->lowpower_flag = info->lowpower_flag & ~(MMS_LPM_FLAG_AOD);
+		if (!info->lowpower_flag)
+			info->lowpower_mode = false;
+	}
+
+	input_info(true, &client->dev, "%s: %s mode, %x\n",
+			__func__, info->lowpower_mode ? "LPM" : "normal",
+			info->lowpower_flag);
+	snprintf(buf, sizeof(buf), "%s", "OK");
+	sec->cmd_state = SEC_CMD_STATUS_OK;
+
+out:
+	sec_cmd_set_cmd_result(sec, buf, strnlen(buf, sizeof(buf)));
+	sec_cmd_set_cmd_exit(sec);
+	sec->cmd_state = SEC_CMD_STATUS_WAITING;
+	input_info(true, &client->dev, "%s: %s\n", __func__, buf);
+}
+
+static void set_aod_rect(void *device_data)
+{
+	struct sec_cmd_data *sec = (struct sec_cmd_data *)device_data;
+	struct mms_ts_info *info = container_of(sec, struct mms_ts_info, sec);
+	char buf[SEC_CMD_STR_LEN] = { 0 };
+	u8 data[11] = {0};
+	int i;
+
+	sec_cmd_set_default_result(sec);
+
+	if (!info->enabled) {
+		input_err(true, &info->client->dev, "%s: [ERROR] Touch is stopped\n", __func__);
+		snprintf(buf, sizeof(buf), "%s", "TSP turned off");
+		sec->cmd_state = SEC_CMD_STATUS_NOT_APPLICABLE;
+		goto out;
+	}
+
+	input_info(true, &info->client->dev, "%s: w:%d, h:%d, x:%d, y:%d\n",
+			__func__, sec->cmd_param[0], sec->cmd_param[1],
+			sec->cmd_param[2], sec->cmd_param[3]);
+
+	data[0] = MIP_R0_AOT;
+	data[1] = MIP_R0_AOT_BOX_W;
+	for (i = 0; i < 4; i++) {
+		data[i * 2 + 2] = sec->cmd_param[i] & 0xFF;
+		data[i * 2 + 3] = (sec->cmd_param[i] >> 8) & 0xFF;
+	}
+
+	disable_irq(info->client->irq);
+
+	if (mms_i2c_write(info, data, 10)) {
+		input_err(true, &info->client->dev, "%s [ERROR] mms_i2c_write\n", __func__);
+		enable_irq(info->client->irq);
+		goto out;
+	}
+
+	enable_irq(info->client->irq);
+
+	snprintf(buf, sizeof(buf), "%s", "OK");
+	sec->cmd_state = SEC_CMD_STATUS_OK;
+	sec_cmd_set_cmd_result(sec, buf, strnlen(buf, sizeof(buf)));
+	sec_cmd_set_cmd_exit(sec);
+	return;
+out:
+	sec_cmd_set_cmd_result(sec, buf, strnlen(buf, sizeof(buf)));
+	sec_cmd_set_cmd_exit(sec);
+	sec->cmd_state = SEC_CMD_STATUS_WAITING;
+	input_info(true, &info->client->dev, "%s: %s\n", __func__, buf);
+}
+
+
+static void get_aod_rect(void *device_data)
+{
+	struct sec_cmd_data *sec = (struct sec_cmd_data *)device_data;
+	struct mms_ts_info *info = container_of(sec, struct mms_ts_info, sec);
+	char buf[SEC_CMD_STR_LEN] = { 0 };
+	u8 wbuf[16];
+	u8 rbuf[16];
+	u16 rect_data[4] = {0, };
+	int i;
+
+	sec_cmd_set_default_result(sec);
+
+	disable_irq(info->client->irq);
+
+	wbuf[0] = MIP_R0_AOT;
+	wbuf[1] = MIP_R0_AOT_BOX_W;
+
+	if (mms_i2c_read(info, wbuf, 2, rbuf, 8)) {
+		input_err(true, &info->client->dev, "%s [ERROR] mms_i2c_write\n", __func__);
+		goto out;
+	}
+
+	enable_irq(info->client->irq);
+
+
+	for (i = 0; i < 4; i++)
+		rect_data[i] = (rbuf[i * 2 + 1] & 0xFF) << 8 | (rbuf[i * 2] & 0xFF);
+
+	input_info(true, &info->client->dev, "%s: w:%d, h:%d, x:%d, y:%d\n",
+			__func__, rect_data[0], rect_data[1], rect_data[2], rect_data[3]);
+
+	snprintf(buf, sizeof(buf), "%s", "OK");
+	sec->cmd_state = SEC_CMD_STATUS_OK;
+	sec_cmd_set_cmd_result(sec, buf, strnlen(buf, sizeof(buf)));
+	sec_cmd_set_cmd_exit(sec);
+	return;
+out:
+	sec_cmd_set_cmd_result(sec, buf, strnlen(buf, sizeof(buf)));
+	sec_cmd_set_cmd_exit(sec);
+	sec->cmd_state = SEC_CMD_STATUS_WAITING;
+	input_info(true, &info->client->dev, "%s: %s\n", __func__, buf);
+	enable_irq(info->client->irq);
+}
+
+
 /**
  * Command : Unknown cmd
  */
@@ -1001,6 +1206,8 @@ static struct sec_cmd mms_commands[] = {
 	{SEC_CMD("get_cm_delta", cmd_get_cm_delta),},
 	{SEC_CMD("run_cm_abs_read", cmd_run_test_cm_abs),},
 	{SEC_CMD("get_cm_abs", cmd_get_cm_abs),},
+	{SEC_CMD("run_jitter_read", cmd_run_test_jitter),},
+	{SEC_CMD("get_jitter", cmd_get_jitter),},
 	{SEC_CMD("get_config_ver", cmd_get_config_ver),},
 	{SEC_CMD("get_threshold", cmd_get_threshold),},
 	{SEC_CMD("get_intensity_all_data", get_intensity_all_data),},
@@ -1013,6 +1220,9 @@ static struct sec_cmd mms_commands[] = {
 	{SEC_CMD("get_checksum_data", get_checksum_data),},
 	{SEC_CMD("clear_cover_mode", clear_cover_mode),},
 	{SEC_CMD("spay_enable", spay_enable),},
+	{SEC_CMD("aod_enable", aod_enable),},
+	{SEC_CMD("set_aod_rect", set_aod_rect),},
+	{SEC_CMD("get_aod_rect", get_aod_rect),},
 	{SEC_CMD(NAME_OF_UNKNOWN_CMD, cmd_unknown_cmd),},
 };
 
@@ -1025,9 +1235,9 @@ static ssize_t scrub_position_show(struct device *dev,
 	char buff[256] = { 0 };
 
 	input_info(true, &client->dev, "%s: scrub_id: %d, X:%d, Y:%d\n", __func__,
-				info->scrub_id, 0, 0);
+				info->scrub_id, info->scrub_x, info->scrub_y);
 
-	snprintf(buff, sizeof(buff), "%d %d %d", info->scrub_id, 0, 0);
+	snprintf(buff, sizeof(buff), "%d %d %d", info->scrub_id, info->scrub_x, info->scrub_y);
 
 	info->scrub_id = 0;
 	return snprintf(buf, PAGE_SIZE, "%s", buff);

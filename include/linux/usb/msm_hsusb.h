@@ -2,7 +2,7 @@
  *
  * Copyright (C) 2008 Google, Inc.
  * Author: Brian Swetland <swetland@google.com>
- * Copyright (c) 2009-2016, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2009-2017, The Linux Foundation. All rights reserved.
  *
  * This software is licensed under the terms of the GNU General Public
  * License version 2, as published by the Free Software Foundation, and
@@ -285,6 +285,7 @@ enum usb_id_state {
 		for improving data performance.
  * @bool enable_sdp_typec_current_limit: Indicates whether type-c current for
 		sdp charger to be limited.
+ * @usbeth_reset_gpio: Gpio used for external usb-to-eth reset.
  */
 struct msm_otg_platform_data {
 	int *phy_init_seq;
@@ -321,12 +322,14 @@ struct msm_otg_platform_data {
 	bool enable_phy_id_pullup;
 	int usb_id_gpio;
 	int hub_reset_gpio;
+	int usbeth_reset_gpio;
 	int switch_sel_gpio;
 	bool phy_dvdd_always_on;
 	bool emulation;
 	bool enable_streaming;
 	bool enable_axi_prefetch;
 	bool enable_sdp_typec_current_limit;
+	bool vbus_low_as_hostmode;
 };
 
 /* phy related flags */
@@ -336,6 +339,10 @@ struct msm_otg_platform_data {
 #define PHY_CHARGER_CONNECTED		BIT(3)
 #define PHY_VBUS_VALID_OVERRIDE		BIT(4)
 #define DEVICE_IN_SS_MODE		BIT(5)
+#define PHY_LANE_A			BIT(6)
+#define PHY_LANE_B			BIT(7)
+#define PHY_HSFS_MODE			BIT(8)
+#define PHY_LS_MODE			BIT(9)
 
 #define USB_NUM_BUS_CLOCKS      3
 
@@ -599,6 +606,8 @@ struct msm_hsic_host_platform_data {
 
 	/* gpio used to resume peripheral */
 	unsigned resume_gpio;
+	int *tlmm_init_seq;
+	int tlmm_seq_count;
 
 	/*swfi latency is required while driving resume on to the bus */
 	u32 swfi_latency;
@@ -635,6 +644,7 @@ void msm_bam_usb_host_notify_on_resume(void);
 void msm_bam_hsic_host_notify_on_resume(void);
 bool msm_bam_hsic_host_pipe_empty(void);
 bool msm_usb_bam_enable(enum usb_ctrl ctrl, bool bam_enable);
+int msm_do_bam_disable_enable(enum usb_ctrl ctrl);
 #else
 static inline void msm_bam_set_usb_host_dev(struct device *dev) {}
 static inline void msm_bam_set_hsic_host_dev(struct device *dev) {}
@@ -648,11 +658,16 @@ static inline bool msm_usb_bam_enable(enum usb_ctrl ctrl, bool bam_enable)
 {
 	return true;
 }
+int msm_do_bam_disable_enable(enum usb_ctrl ctrl) { return true; }
 #endif
 #ifdef CONFIG_USB_CI13XXX_MSM
+void msm_hw_soft_reset(void);
 void msm_hw_bam_disable(bool bam_disable);
 void msm_usb_irq_disable(bool disable);
 #else
+static inline void msm_hw_soft_reset(void)
+{
+}
 static inline void msm_hw_bam_disable(bool bam_disable)
 {
 }
@@ -672,8 +687,7 @@ static inline int get_pm_runtime_counter(struct device *dev) { return -ENOSYS; }
 #endif
 
 #ifdef CONFIG_USB_DWC3_MSM
-int msm_ep_config(struct usb_ep *ep, struct usb_request *request,
-							gfp_t gfp_flags);
+int msm_ep_config(struct usb_ep *ep, struct usb_request *request);
 int msm_ep_unconfig(struct usb_ep *ep);
 void dwc3_tx_fifo_resize_request(struct usb_ep *ep, bool qdss_enable);
 int msm_data_fifo_config(struct usb_ep *ep, phys_addr_t addr, u32 size,
@@ -688,8 +702,7 @@ static inline int msm_data_fifo_config(struct usb_ep *ep, phys_addr_t addr,
 	return -ENODEV;
 }
 
-static inline int msm_ep_config(struct usb_ep *ep, struct usb_request *request,
-							gfp_t gfp_flags)
+static inline int msm_ep_config(struct usb_ep *ep, struct usb_request *request)
 {
 	return -ENODEV;
 }

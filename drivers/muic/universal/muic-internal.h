@@ -22,11 +22,17 @@
 #define __MUIC_INTERNAL_H__
 
 #include <linux/muic/muic.h>
+#include <linux/mutex.h>
 #if defined(CONFIG_MUIC_SUPPORT_EARJACK)
 #include <linux/input.h>
 #endif
 
 #define MUIC_DEV_NAME   "muic-universal"
+
+enum muic_op_mode {
+	OPMODE_MUIC = 0<<0,
+	OPMODE_CCIC = 1<<0,
+};
 
 /* Slave addr = 0x4A: MUIC */
 enum ioctl_cmd {
@@ -45,6 +51,23 @@ enum switching_mode{
 	SWMODE_MANUAL =0,
 	SWMODE_AUTO = 1,
 };
+
+#if defined(CONFIG_MUIC_SUPPORT_EARJACK)
+enum earjackkey_index {
+	EARJACK_KEY_ERROR,
+	EARJACK_PRESS_SEND_END,
+	EARJACK_PRESS_VOL_UP,
+	EARJACK_PRESS_VOL_DN,
+	EARJACK_LONG_PRESS_SEND,
+	EARJACK_LONG_PRESS_VOL_UP,
+	EARJACK_LONG_PRESS_VOL_DN,
+	EARJACK_LONG_RELEASE_SEND,
+	EARJACK_LONG_RELEASE_VOL_UP,
+	EARJACK_LONG_RELEASE_VOL_DN,
+	EARJACK_STUCK_KEY,
+	EARJACK_NO_KEY,
+};
+#endif
 
 /*
  * Manual Switch
@@ -82,6 +105,9 @@ typedef struct _muic_vps_scatterred_type {
         u8      val3;
         u8      adc;
         u8      vbvolt;
+#if defined(CONFIG_SEC_DEBUG)
+        u8      chgtyp;
+#endif
 }vps_scatterred_type;
 
 typedef struct _muic_vps_table_t {
@@ -146,10 +172,25 @@ typedef struct _muic_data_t {
 	bool			is_factory_start;
 	bool			is_rustproof;
 	bool			is_otg_test;
+#if defined(CONFIG_MUIC_UNIVERSAL_MULTI_SUPPORT)
+	bool			is_afc_support;
+#endif
 	struct delayed_work	init_work;
 	struct delayed_work	usb_work;
-
+#if defined(CONFIG_MUIC_UNIVERSAL_SM5705_AFC)
+	int			max_afc_supported_volt;
+	int			max_afc_supported_cur;
+#endif
 	bool			discard_interrupt;
+	bool			is_dcdtmr_intr;
+	/* Add Muic structure's member variable for VZW requirement(Rp0 Cable) */
+#if defined(CONFIG_MUIC_SUPPORT_CCIC)
+	bool			is_ccic_attach;
+#if defined(CONFIG_MUIC_UNIVERSAL_SM5705_AFC)
+	int			afc_retry_count;	
+	bool			retry_afc;
+#endif
+#endif		
 #if defined(CONFIG_USB_EXTERNAL_NOTIFY)
 	/* USB Notifier */
 	struct notifier_block	usb_nb;
@@ -158,6 +199,10 @@ typedef struct _muic_data_t {
 	bool			is_earkeypressed;
 	int			old_keycode;
 	struct input_dev        *input;
+	int			earkey_state;
+#endif
+#if defined(CONFIG_SEC_DEBUG)
+	bool			usb_to_ta_state;
 #endif
 
 	int is_flash_on;
@@ -167,8 +212,51 @@ typedef struct _muic_data_t {
 	struct delayed_work	afc_restart_work;
 	struct delayed_work	afc_delay_check_work;
 	int delay_check_count;
+#if defined(CONFIG_MUIC_SUPPORT_CCIC)
+	/* legacy TA or USB for CCIC */
+	muic_attached_dev_t	legacy_dev;
+
+	/* CCIC Notifier */
+#ifdef CONFIG_USB_TYPEC_MANAGER_NOTIFIER
+	struct notifier_block	manager_nb;
+#else
+	struct notifier_block	ccic_nb;
+#endif
+
+	struct delayed_work	ccic_work;
+
+	/* Operation Mode */
+	enum muic_op_mode	opmode;
+	bool 			afc_water_disable;
+	/* Add Muic structure's member variable for VZW requirement(Rp0 Cable) */
+	//bool	is_ccic_attach;
+	int	ccic_rp;
+
+#endif
+
+#ifdef CONFIG_MUIC_SM5705_AFC_18W_TA_SUPPORT
+    int is_18w_ta;
+#endif
+
+#ifdef CONFIG_MUIC_SM570X_SWITCH_CONTROL_GPIO
+    int sm570x_switch_gpio;
+#endif
+
+	int muic_reset_count;
+	struct mutex lock;
+#if defined(CONFIG_MUIC_UNIVERSAL_SM5708)
+	struct delayed_work	vdp_src_en_work;
+#endif
 }muic_data_t;
 
 extern struct device *switch_device;
+
+#if defined(CONFIG_SEC_DEBUG)
+enum usb_to_ta_status_t {
+	USB2TA_DISABLE,
+	USB2TA_ENABLE,
+	USB2TA_READ,
+};
+#endif
 
 #endif /* __MUIC_INTERNAL_H__ */

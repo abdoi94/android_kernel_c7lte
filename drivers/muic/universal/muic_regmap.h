@@ -21,6 +21,18 @@
 #define _BIT6 6
 #define _BIT7 7
 
+#if defined(CONFIG_MUIC_UNIVERSAL_SM5705)
+#define CHGTYPE_NONE		0x00
+#define CHGTYPE_DCP		0x01
+#define CHGTYPE_CDP		0x02
+#define CHGTYPE_SDP		0x04
+#define CHGTYPE_TIMEOUT_SDP	0x08
+#define CHGTYPE_U200		0x10
+#define CHGTYPE_AFC		0x11
+#define CHGTYPE_LO_TA		0x12
+#define CHGTYPE_QC20		0x13
+#endif
+
 #define BITN(nr) (nr)
 
 #define INIT_NONE (-1)
@@ -103,11 +115,22 @@ struct vendor_ops {
 	int (*get_adc_scan_mode)(struct regmap_desc  *);
 	int (*set_rustproof)(struct regmap_desc  *, int);
 	int (*get_vps_data)(struct regmap_desc *, void *);
-	int (*muic_enable_accdet)(struct regmap_desc *);
-	int (*muic_disable_accdet)(struct regmap_desc *);
+	int (*enable_accdet)(struct regmap_desc *, int);
+	int (*enable_chgdet)(struct regmap_desc *, int);
+	int (*run_chgdet)(struct regmap_desc *, bool);
 	int (*rescan)(struct regmap_desc *, int);
 	int (*get_vbus_value)(struct regmap_desc *);
-	int (*set_earjack)(struct regmap_desc *, int);
+	int (*prepare_switch)(muic_data_t *, int);
+	bool (*get_dcdtmr_irq)(struct regmap_desc *);
+#if defined(CONFIG_MUIC_SUPPORT_EARJACK)
+	int (*set_earjack_mode)(struct regmap_desc *, int);
+	int (*set_earjack_state)(struct regmap_desc *, int, int, int, int);
+	int (*attached_earjack_type)(struct regmap_desc *);
+#endif
+#if defined(CONFIG_SEC_DEBUG)
+	int (*usb_to_ta)(struct regmap_desc *, int);
+#endif
+	int (*reset_vbus_path)(struct regmap_desc *);
 };
 
 struct afc_ops {
@@ -119,6 +142,9 @@ struct afc_ops {
 	int (*afc_error)(struct regmap_desc  *);
 	int (*afc_ctrl_reg)(struct regmap_desc  *, int, bool);
 	int (*afc_init_check)(struct regmap_desc  *);
+#ifdef CONFIG_MUIC_SM5705_AFC_18W_TA_SUPPORT
+	void (*afc_reset_multibyte_retry_count)(struct regmap_desc	*);
+#endif
 };
 
 struct regmap_desc {
@@ -133,12 +159,13 @@ struct regmap_desc {
 };
 
 extern char *regmap_to_name(struct regmap_desc *pdesc, int);
-extern int regmap_com_to(struct regmap_desc *pdesc, int);
+extern int regmap_com_to(muic_data_t *pmuic, int);
 extern int muic_reg_init(muic_data_t *pmuic);
 extern int set_int_mask(muic_data_t *pmuic, bool);
 extern int set_manual_sw(muic_data_t *pmuic, bool);
 extern int regmap_read_value(struct regmap_desc *pdesc, int);
 extern int regmap_read_raw_value(struct regmap_desc *pdesc, int);
 extern int regmap_write_value(struct regmap_desc *pdesc, int, int);
+extern int regmap_write_value_ex(struct regmap_desc *pdesc, int, int);
 extern void muic_register_regmap(struct regmap_desc **pdesc, void *);
 #endif

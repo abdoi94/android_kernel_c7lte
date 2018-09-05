@@ -34,8 +34,12 @@
 #include <linux/of_gpio.h>
 #include <linux/regulator/consumer.h>
 #include "cm36686.h"
-
 #include <linux/sensor/sensors_core.h>
+
+#ifdef TAG
+#undef TAG
+#define TAG "[PROX]"
+#endif
 
 /* For debugging */
 #define	cm36686_DEBUG
@@ -1475,7 +1479,7 @@ static int cm36686_i2c_probe(struct i2c_client *client,
 	INIT_WORK(&cm36686->work_light, cm36686_work_func_light);
 
 	/* set sysfs for proximity sensor */
-	ret = sensors_register(cm36686->proximity_dev,
+	ret = sensors_register(&cm36686->proximity_dev,
 		cm36686, prox_sensor_attrs,
 			"proximity_sensor");
 	if (ret) {
@@ -1485,7 +1489,7 @@ static int cm36686_i2c_probe(struct i2c_client *client,
 	}
 
 	/* set sysfs for light sensor */
-	ret = sensors_register(cm36686->light_dev,
+	ret = sensors_register(&cm36686->light_dev,
 		cm36686, light_sensor_attrs,
 			"light_sensor");
 	if (ret) {

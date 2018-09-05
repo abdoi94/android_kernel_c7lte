@@ -130,6 +130,7 @@ struct sm5705_charger_data {
 #endif
 	// temp for rev2 SW WA
 	struct delayed_work op_mode_switch_work;        /* for WA obnormal switch case in JIG cable */
+	struct delayed_work dis_discharging_force_work;
 
 	struct wake_lock wpc_wake_lock;
 #if defined(SM5705_SW_SOFT_START)

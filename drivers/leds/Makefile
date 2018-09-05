@@ -29,6 +29,7 @@ obj-$(CONFIG_LEDS_LP5562)		+= leds-lp5562.o
 obj-$(CONFIG_LEDS_LP8501)		+= leds-lp8501.o
 obj-$(CONFIG_LEDS_LP8788)		+= leds-lp8788.o
 obj-$(CONFIG_LEDS_TCA6507)		+= leds-tca6507.o
+obj-$(CONFIG_LEDS_TLC591XX)		+= leds-tlc591xx.o
 obj-$(CONFIG_LEDS_CLEVO_MAIL)		+= leds-clevo-mail.o
 obj-$(CONFIG_LEDS_IPAQ_MICRO)		+= leds-ipaq-micro.o
 obj-$(CONFIG_LEDS_HP6XX)		+= leds-hp6xx.o
@@ -61,9 +62,15 @@ obj-$(CONFIG_LEDS_VERSATILE)		+= leds-versatile.o
 obj-$(CONFIG_LEDS_MENF21BMC)		+= leds-menf21bmc.o
 obj-$(CONFIG_LEDS_AW2013)		+= leds-aw2013.o
 obj-$(CONFIG_LEDS_SM5705)		+= leds-sm5705.o
+obj-$(CONFIG_LEDS_SM5708)		+= leds-sm5708.o
 obj-$(CONFIG_LEDS_SM5705_RGB)		+= leds-sm5705-rgb.o
+obj-$(CONFIG_LEDS_SM5708_RGB)		+= leds-sm5708-rgb.o
 obj-$(CONFIG_LEDS_KTD2026)		+= leds-ktd2026.o
-
+obj-$(CONFIG_LEDS_KTD2692)		+= leds-ktd2692.o
+obj-$(CONFIG_FLASHLIGHT)		+= flashlight.o
+obj-$(CONFIG_SM_FLASH_LED)		+= smfled.o
+obj-$(CONFIG_FLED_SM5703)		+= sm5703_fled.o
+obj-$(CONFIG_LEDS_S2MU005)		+= leds-s2mu005.o
 # LED SPI Drivers
 obj-$(CONFIG_LEDS_DAC124S085)		+= leds-dac124s085.o
 

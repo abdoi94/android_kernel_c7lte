@@ -861,54 +861,65 @@ static int samsung_osc_te_fitting_get_cmd(struct te_fitting_lut *lut, long long 
 
 }
 #endif
-static void dsi_update_mdnie_data(void)
+
+static void mdnie_init(struct samsung_display_driver_data *vdd)
 {
-	/* Update mdnie command */
-	mdnie_data.DSI0_COLOR_BLIND_MDNIE_2 = DSI0_COLOR_BLIND_MDNIE_2;
-	mdnie_data.DSI0_RGB_SENSOR_MDNIE_1 = DSI0_RGB_SENSOR_MDNIE_1;
-	mdnie_data.DSI0_RGB_SENSOR_MDNIE_2 = DSI0_RGB_SENSOR_MDNIE_2;
+	mdnie_data = kzalloc(sizeof(struct mdnie_lite_tune_data), GFP_KERNEL);
+	if (!mdnie_data) {
+		LCD_ERR("fail to alloc mdnie_data..\n");
+		return;
+	}
 
-	mdnie_data.DSI0_BYPASS_MDNIE = DSI0_BYPASS_MDNIE;
-	mdnie_data.DSI0_NEGATIVE_MDNIE = DSI0_NEGATIVE_MDNIE;
-	mdnie_data.DSI0_COLOR_BLIND_MDNIE = DSI0_COLOR_BLIND_MDNIE;
-	mdnie_data.DSI0_HBM_CE_MDNIE = DSI0_HBM_CE_MDNIE;
-	mdnie_data.DSI0_HBM_CE_TEXT_MDNIE = DSI0_HBM_CE_TEXT_MDNIE;
-	mdnie_data.DSI0_RGB_SENSOR_MDNIE = DSI0_RGB_SENSOR_MDNIE;
-	mdnie_data.DSI0_CURTAIN = DSI0_CURTAIN;
-	mdnie_data.DSI0_GRAYSCALE_MDNIE = DSI0_GRAYSCALE_MDNIE;
-	mdnie_data.DSI0_GRAYSCALE_NEGATIVE_MDNIE = DSI0_GRAYSCALE_NEGATIVE_MDNIE;
-	mdnie_data.DSI0_COLOR_BLIND_MDNIE_SCR = DSI0_COLOR_BLIND_MDNIE_2;
-	mdnie_data.DSI0_RGB_SENSOR_MDNIE_SCR = DSI0_RGB_SENSOR_MDNIE_2;
+	vdd->mdnie_tune_size1 = 4;
+	vdd->mdnie_tune_size2 = 155;
 
-	mdnie_data.mdnie_tune_value_dsi0 = mdnie_tune_value_dsi0;
+	if (mdnie_data) {
+		/* Update mdnie command */
+		mdnie_data[0].COLOR_BLIND_MDNIE_2 = DSI0_COLOR_BLIND_MDNIE_2;
+		mdnie_data[0].RGB_SENSOR_MDNIE_1 = DSI0_RGB_SENSOR_MDNIE_1;
+		mdnie_data[0].RGB_SENSOR_MDNIE_2 = DSI0_RGB_SENSOR_MDNIE_2;
 
-	/* Update MDNIE data related with size, offset or index */
-	mdnie_data.dsi0_bypass_mdnie_size = ARRAY_SIZE(DSI0_BYPASS_MDNIE);
-	mdnie_data.mdnie_color_blinde_cmd_offset = MDNIE_COLOR_BLINDE_CMD_OFFSET;
-	mdnie_data.mdnie_step_index[MDNIE_STEP1] = MDNIE_STEP1_INDEX;
-	mdnie_data.mdnie_step_index[MDNIE_STEP2] = MDNIE_STEP2_INDEX;
-	mdnie_data.address_scr_white[ADDRESS_SCR_WHITE_RED_OFFSET] = ADDRESS_SCR_WHITE_RED;
-	mdnie_data.address_scr_white[ADDRESS_SCR_WHITE_GREEN_OFFSET] = ADDRESS_SCR_WHITE_GREEN;
-	mdnie_data.address_scr_white[ADDRESS_SCR_WHITE_BLUE_OFFSET] = ADDRESS_SCR_WHITE_BLUE;
-	mdnie_data.dsi0_rgb_sensor_mdnie_1_size = DSI0_RGB_SENSOR_MDNIE_1_SIZE;
-	mdnie_data.dsi0_rgb_sensor_mdnie_2_size = DSI0_RGB_SENSOR_MDNIE_2_SIZE;
-	
-	mdnie_data.dsi0_adjust_ldu_table = adjust_ldu_data;
-	mdnie_data.dsi1_adjust_ldu_table = adjust_ldu_data;
-	mdnie_data.dsi0_max_adjust_ldu = 6;
-	mdnie_data.dsi1_max_adjust_ldu = 6;
-	mdnie_data.dsi0_scr_step_index = MDNIE_STEP2_INDEX;
-	mdnie_data.dsi1_scr_step_index = MDNIE_STEP2_INDEX;
+		mdnie_data[0].BYPASS_MDNIE = DSI0_BYPASS_MDNIE;
+		mdnie_data[0].NEGATIVE_MDNIE = DSI0_NEGATIVE_MDNIE;
+		mdnie_data[0].COLOR_BLIND_MDNIE = DSI0_COLOR_BLIND_MDNIE;
+		mdnie_data[0].HBM_CE_MDNIE = DSI0_HBM_CE_MDNIE;
+		mdnie_data[0].HBM_CE_TEXT_MDNIE = DSI0_HBM_CE_TEXT_MDNIE;
+		mdnie_data[0].RGB_SENSOR_MDNIE = DSI0_RGB_SENSOR_MDNIE;
+		mdnie_data[0].CURTAIN = DSI0_CURTAIN;
+		mdnie_data[0].GRAYSCALE_MDNIE = DSI0_GRAYSCALE_MDNIE;
+		mdnie_data[0].GRAYSCALE_NEGATIVE_MDNIE = DSI0_GRAYSCALE_NEGATIVE_MDNIE;
+		mdnie_data[0].COLOR_BLIND_MDNIE_SCR = DSI0_COLOR_BLIND_MDNIE_2;
+		mdnie_data[0].RGB_SENSOR_MDNIE_SCR = DSI0_RGB_SENSOR_MDNIE_2;
+
+		mdnie_data[0].mdnie_tune_value = mdnie_tune_value_dsi0;
+		mdnie_data[0].light_notification_tune_value = light_notification_tune_value;
+
+		/* Update MDNIE data related with size, offset or index */
+		mdnie_data[0].bypass_mdnie_size = ARRAY_SIZE(DSI0_BYPASS_MDNIE);
+		mdnie_data[0].mdnie_color_blinde_cmd_offset = MDNIE_COLOR_BLINDE_CMD_OFFSET;
+		mdnie_data[0].mdnie_step_index[MDNIE_STEP1] = MDNIE_STEP1_INDEX;
+		mdnie_data[0].mdnie_step_index[MDNIE_STEP2] = MDNIE_STEP2_INDEX;
+		mdnie_data[0].address_scr_white[ADDRESS_SCR_WHITE_RED_OFFSET] = ADDRESS_SCR_WHITE_RED;
+		mdnie_data[0].address_scr_white[ADDRESS_SCR_WHITE_GREEN_OFFSET] = ADDRESS_SCR_WHITE_GREEN;
+		mdnie_data[0].address_scr_white[ADDRESS_SCR_WHITE_BLUE_OFFSET] = ADDRESS_SCR_WHITE_BLUE;
+		mdnie_data[0].rgb_sensor_mdnie_1_size = DSI0_RGB_SENSOR_MDNIE_1_SIZE;
+		mdnie_data[0].rgb_sensor_mdnie_2_size = DSI0_RGB_SENSOR_MDNIE_2_SIZE;
+		mdnie_data[0].adjust_ldu_table = adjust_ldu_data;
+		mdnie_data[0].max_adjust_ldu = 6;
+		mdnie_data[0].scr_step_index = MDNIE_STEP2_INDEX;
+		mdnie_data[0].white_default_r = 0xff;
+		mdnie_data[0].white_default_g = 0xff;
+		mdnie_data[0].white_default_b = 0xff;
+		mdnie_data[0].white_balanced_r = 0;
+		mdnie_data[0].white_balanced_g = 0;
+		mdnie_data[0].white_balanced_b = 0;
+
+	}
 }
 
 static void mdss_panel_init(struct samsung_display_driver_data *vdd)
 {
 	pr_info("%s\n", __func__);
-
-	vdd->support_mdnie_lite = true;
-
-	vdd->mdnie_tune_size1 = 4;
-	vdd->mdnie_tune_size2 = 155;
 
 	/* ON/OFF */
 	vdd->panel_func.samsung_panel_on_pre = mdss_panel_on_pre;
@@ -944,7 +955,8 @@ static void mdss_panel_init(struct samsung_display_driver_data *vdd)
 
 	vdd->auto_brightness_level = 12;
 
-	dsi_update_mdnie_data();
+	/* MDNIE */
+	vdd->panel_func.samsung_mdnie_init = mdnie_init;
 
 	/* force ACL */
 	vdd->panel_func.samsung_force_acl_on = mdss_force_acl_on;

@@ -31,6 +31,14 @@ static struct v4l2_file_operations msm_eeprom_v4l2_subdev_fops;
 
 struct msm_eeprom_ctrl_t *g_ectrl[MAX_CAMERAS];
 
+#if defined(CONFIG_GET_REAR_MODULE_ID)
+extern uint8_t rear_module_id[FROM_MODULE_ID_SIZE + 1];
+#endif
+
+#if defined(CONFIG_GET_FRONT_MODULE_ID)
+extern uint8_t front_module_id[FROM_MODULE_ID_SIZE + 1];
+#endif
+
 void *msm_get_eeprom_data_base(int id, uint32_t *size)
 {
 	struct msm_eeprom_ctrl_t *e_ctrl = NULL;
@@ -672,10 +680,10 @@ static int eeprom_config_read_cal_data(struct msm_eeprom_ctrl_t *e_ctrl,
 
 	/* check range */
 	if (cdata->cfg.read_data.num_bytes >
-		e_ctrl->cal_data.num_data) {
-		CDBG("%s: Invalid size. exp %u, req %u\n", __func__,
+		e_ctrl->cal_data.num_data || cdata->cfg.read_data.addr>e_ctrl->cal_data.num_data) {
+		CDBG("%s: Invalid size or addr. exp %u, req %u, addr %x\n", __func__,
 			e_ctrl->cal_data.num_data,
-			cdata->cfg.read_data.num_bytes);
+			cdata->cfg.read_data.num_bytes,cdata->cfg.read_data.addr);
 		return -EINVAL;
 	}
 	if (!e_ctrl->cal_data.mapdata)
@@ -693,6 +701,7 @@ static int msm_eeprom_config(struct msm_eeprom_ctrl_t *e_ctrl,
 	struct msm_eeprom_cfg_data *cdata =
 		(struct msm_eeprom_cfg_data *)argp;
 	int rc = 0;
+	size_t length = 0;
 
 	CDBG("%s E\n", __func__);
 	switch (cdata->cfgtype) {
@@ -705,9 +714,15 @@ static int msm_eeprom_config(struct msm_eeprom_ctrl_t *e_ctrl,
 		}
 		CDBG("%s E CFG_EEPROM_GET_INFO\n", __func__);
 		cdata->is_supported = e_ctrl->is_supported;
-		memcpy(cdata->cfg.eeprom_name,
-			e_ctrl->eboard_info->eeprom_name,
-			sizeof(cdata->cfg.eeprom_name));
+		length = strlen(e_ctrl->eboard_info->eeprom_name) + 1;
+		if (length > MAX_EEPROM_NAME) {
+			pr_err("%s:%d invalid eeprom_name length %d\n",
+			__func__, __LINE__, (int)length);
+			rc = -EINVAL;
+			break;
+		}
+		
+		memcpy(cdata->cfg.eeprom_name, e_ctrl->eboard_info->eeprom_name, length);
 		break;
 	case CFG_EEPROM_GET_CAL_DATA:
 		CDBG("%s E CFG_EEPROM_GET_CAL_DATA\n", __func__);
@@ -770,7 +785,7 @@ static long msm_eeprom_subdev_ioctl(struct v4l2_subdev *sd,
 	struct msm_eeprom_ctrl_t *e_ctrl = v4l2_get_subdevdata(sd);
 	void __user *argp = (void __user *)arg;
 	CDBG("%s E\n", __func__);
-	CDBG("%s:%d a_ctrl %p argp %p\n", __func__, __LINE__, e_ctrl, argp);
+	CDBG("%s:%d a_ctrl %pK argp %pK\n", __func__, __LINE__, e_ctrl, argp);
 	switch (cmd) {
 	case VIDIOC_MSM_SENSOR_GET_SUBDEV_ID:
 		return msm_eeprom_get_subdev_id(e_ctrl, argp);
@@ -1568,6 +1583,16 @@ static int eeprom_init_config32(struct msm_eeprom_ctrl_t *e_ctrl,
 
 	power_info = &(e_ctrl->eboard_info->power_info);
 
+	if ((power_setting_array32->size > MAX_POWER_CONFIG) ||
+		(power_setting_array32->size_down > MAX_POWER_CONFIG) ||
+		(!power_setting_array32->size) ||
+		(!power_setting_array32->size_down)) {
+		pr_err("%s:%d invalid power setting size=%d size_down=%d\n",
+			__func__, __LINE__, power_setting_array32->size,
+			power_setting_array32->size_down);
+		rc = -EINVAL;
+		goto free_mem;
+	}
 	msm_eeprom_copy_power_settings_compat(
 		power_setting_array,
 		power_setting_array32);
@@ -1581,20 +1606,6 @@ static int eeprom_init_config32(struct msm_eeprom_ctrl_t *e_ctrl,
 		power_setting_array->size;
 	power_info->power_down_setting_size =
 		power_setting_array->size_down;
-
-	if ((power_info->power_setting_size >
-		MAX_POWER_CONFIG) ||
-		(power_info->power_down_setting_size >
-		MAX_POWER_CONFIG) ||
-		(!power_info->power_down_setting_size) ||
-		(!power_info->power_setting_size)) {
-		rc = -EINVAL;
-		pr_err("%s:%d Invalid power setting size :%d, %d\n",
-			__func__, __LINE__,
-			power_info->power_setting_size,
-			power_info->power_down_setting_size);
-		goto free_mem;
-	}
 
 	if (e_ctrl->i2c_client.cci_client) {
 		e_ctrl->i2c_client.cci_client->i2c_freq_mode =
@@ -1645,6 +1656,7 @@ static int msm_eeprom_config32(struct msm_eeprom_ctrl_t *e_ctrl,
 	struct msm_eeprom_cfg_data32 *cdata =
 		(struct msm_eeprom_cfg_data32 *)argp;
 	int rc = 0;
+	size_t length = 0;
 
 	CDBG("%s E cfg type %d\n", __func__,cdata->cfgtype);
 	switch (cdata->cfgtype) {
@@ -1658,9 +1670,15 @@ static int msm_eeprom_config32(struct msm_eeprom_ctrl_t *e_ctrl,
 		}
 		CDBG("%s E CFG_EEPROM_GET_INFO\n", __func__);
 		cdata->is_supported = e_ctrl->is_supported;
-		memcpy(cdata->cfg.eeprom_name,
-			e_ctrl->eboard_info->eeprom_name,
-			sizeof(cdata->cfg.eeprom_name));
+		length = strlen(e_ctrl->eboard_info->eeprom_name) + 1;
+		if (length > MAX_EEPROM_NAME) {
+			pr_err("%s:%d invalid eeprom_name length %d\n",
+			__func__, __LINE__, (int)length);
+			rc = -EINVAL;
+			break;
+		}		
+		
+		memcpy(cdata->cfg.eeprom_name, e_ctrl->eboard_info->eeprom_name, length);
 		break;
 	case CFG_EEPROM_GET_CAL_DATA:
 		CDBG("%s E CFG_EEPROM_GET_CAL_DATA\n", __func__);
@@ -1703,7 +1721,7 @@ static long msm_eeprom_subdev_ioctl32(struct v4l2_subdev *sd,
 	void __user *argp = (void __user *)arg;
 
 	CDBG("%s E\n", __func__);
-	CDBG("%s:%d a_ctrl %p argp %p\n", __func__, __LINE__, e_ctrl, argp);
+	CDBG("%s:%d a_ctrl %pK argp %pK\n", __func__, __LINE__, e_ctrl, argp);
 	switch (cmd) {
 	case VIDIOC_MSM_SENSOR_GET_SUBDEV_ID:
 		return msm_eeprom_get_subdev_id(e_ctrl, argp);
@@ -1876,6 +1894,28 @@ static int msm_eeprom_platform_probe(struct platform_device *pdev)
 				e_ctrl->cal_data.mapdata[j]);
 
 		e_ctrl->is_supported |= msm_eeprom_match_crc(&e_ctrl->cal_data);
+
+#if defined( CONFIG_GET_REAR_MODULE_ID )
+		if( pdev->id == 0 ) {
+			memcpy(rear_module_id, &(e_ctrl->cal_data.mapdata[FROM_MODULE_ID_ADDR]), FROM_MODULE_ID_SIZE);
+			rear_module_id[FROM_MODULE_ID_SIZE] = '\0';
+      
+			CDBG("%s : %d rear_module_id = %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X\n", __func__, e_ctrl->subdev_id,
+				rear_module_id[0], rear_module_id[1], rear_module_id[2], rear_module_id[3], rear_module_id[4],
+				rear_module_id[5], rear_module_id[6], rear_module_id[7], rear_module_id[8], rear_module_id[9]);
+		}
+#endif  
+
+#if defined( CONFIG_GET_FRONT_MODULE_ID )
+		if( pdev->id == 1 ) {
+			memcpy(front_module_id, &(e_ctrl->cal_data.mapdata[FROM_MODULE_ID_ADDR]), FROM_MODULE_ID_SIZE);
+			front_module_id[FROM_MODULE_ID_SIZE] = '\0';
+      
+			CDBG("%s : %d front_module_id = %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X\n", __func__, e_ctrl->subdev_id,
+				front_module_id[0], front_module_id[1], front_module_id[2], front_module_id[3], front_module_id[4],
+				front_module_id[5], front_module_id[6], front_module_id[7], front_module_id[8], front_module_id[9]);
+		}
+#endif    
 
 		rc = msm_camera_power_down(power_info,
 			e_ctrl->eeprom_device_type, &e_ctrl->i2c_client);

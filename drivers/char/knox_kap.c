@@ -22,7 +22,6 @@
 #include <linux/export.h>
 #include <linux/seq_file.h>
 #include <linux/knox_kap.h>
-#include <linux/security/lksecapp_interface.h>
 
 #include <asm/uaccess.h>
 #include <asm/io.h> 
@@ -34,23 +33,6 @@
 
 unsigned int kap_on_reboot = 0;  // 1: turn on kap after reboot; 0: no pending ON action
 unsigned int kap_off_reboot = 0; // 1: turn off kap after reboot; 0: no pending OFF action
-
-u64 exynos_smc64(u64 cmd, u64 arg1, u64 arg2, u64 arg3)
-{
-        register u64 reg0 __asm__("x0") = cmd;
-        register u64 reg1 __asm__("x1") = arg1;
-        register u64 reg2 __asm__("x2") = arg2;
-        register u64 reg3 __asm__("x3") = arg3;
-
-        __asm__ volatile (
-                "dsb    sy\n"
-                "smc    0\n"
-                : "+r"(reg0), "+r"(reg1), "+r"(reg2), "+r"(reg3)
-
-        );
-
-        return reg0;
-}
 
 static int get_kap_lksecapp_call(void)
 {
@@ -97,7 +79,6 @@ static void turn_off_kap(void) {
 	kap_on_reboot = 0;
 	kap_off_reboot = 1;
 	printk(KERN_ERR " %s -> Turn off kap mode\n", __FUNCTION__);
-	//exynos_smc64(SMC_CMD_KAP_CALL, 0x51, 0, 0);
 }
 
 static void turn_on_kap(void) {

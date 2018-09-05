@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2016, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -284,13 +284,13 @@ bad_uc_top_ofst:
 }
 
 /**
- * ipa_uc_state_check() - Check the status of the uC interface
+ * ipa2_uc_state_check() - Check the status of the uC interface
  *
  * Return value: 0 if the uC is loaded, interface is initialized
  *               and there was no recent failure in one of the commands.
  *               A negative value is returned otherwise.
  */
-int ipa_uc_state_check(void)
+int ipa2_uc_state_check(void)
 {
 	if (!ipa_ctx->uc_ctx.uc_inited) {
 		IPAERR("uC interface not initialized\n");
@@ -309,7 +309,7 @@ int ipa_uc_state_check(void)
 
 	return 0;
 }
-EXPORT_SYMBOL(ipa_uc_state_check);
+EXPORT_SYMBOL(ipa2_uc_state_check);
 
 /**
  * ipa_uc_loaded_check() - Check the uC has been loaded
@@ -331,7 +331,7 @@ static void ipa_uc_event_handler(enum ipa_irq_type interrupt,
 
 	WARN_ON(private_data != ipa_ctx);
 
-	IPA2_ACTIVE_CLIENTS_INC_SIMPLE();
+	IPA_ACTIVE_CLIENTS_INC_SIMPLE();
 
 	IPADBG("uC evt opcode=%u\n",
 		ipa_ctx->uc_ctx.uc_sram_mmio->eventOp);
@@ -342,7 +342,7 @@ static void ipa_uc_event_handler(enum ipa_irq_type interrupt,
 	if (0 > feature || IPA_HW_FEATURE_MAX <= feature) {
 		IPAERR("Invalid feature %u for event %u\n",
 			feature, ipa_ctx->uc_ctx.uc_sram_mmio->eventOp);
-		IPA2_ACTIVE_CLIENTS_DEC_SIMPLE();
+		IPA_ACTIVE_CLIENTS_DEC_SIMPLE();
 		return;
 	}
 	/* Feature specific handling */
@@ -372,7 +372,7 @@ static void ipa_uc_event_handler(enum ipa_irq_type interrupt,
 		IPADBG("unsupported uC evt opcode=%u\n",
 				ipa_ctx->uc_ctx.uc_sram_mmio->eventOp);
 	}
-	IPA2_ACTIVE_CLIENTS_DEC_SIMPLE();
+	IPA_ACTIVE_CLIENTS_DEC_SIMPLE();
 
 }
 
@@ -380,14 +380,14 @@ static int ipa_uc_panic_notifier(struct notifier_block *this,
 		unsigned long event, void *ptr)
 {
 	int result = 0;
-	struct ipa2_active_client_logging_info log_info;
+	struct ipa_active_client_logging_info log_info;
 
 	IPADBG("this=%p evt=%lu ptr=%p\n", this, event, ptr);
 
-	result = ipa_uc_state_check();
+	result = ipa2_uc_state_check();
 	if (result)
 		goto fail;
-	IPA2_ACTIVE_CLIENTS_PREP_SIMPLE(log_info);
+	IPA_ACTIVE_CLIENTS_PREP_SIMPLE(log_info);
 	if (ipa2_inc_client_enable_clks_no_block(&log_info))
 		goto fail;
 
@@ -399,7 +399,7 @@ static int ipa_uc_panic_notifier(struct notifier_block *this,
 	/* give uc enough time to save state */
 	udelay(IPA_PKT_FLUSH_TO_US);
 
-	IPA2_ACTIVE_CLIENTS_DEC_SIMPLE();
+	IPA_ACTIVE_CLIENTS_DEC_SIMPLE();
 	IPADBG("err_fatal issued\n");
 
 fail:
@@ -427,7 +427,7 @@ static void ipa_uc_response_hdlr(enum ipa_irq_type interrupt,
 
 	WARN_ON(private_data != ipa_ctx);
 
-	IPA2_ACTIVE_CLIENTS_INC_SIMPLE();
+	IPA_ACTIVE_CLIENTS_INC_SIMPLE();
 	IPADBG("uC rsp opcode=%u\n",
 			ipa_ctx->uc_ctx.uc_sram_mmio->responseOp);
 
@@ -436,7 +436,7 @@ static void ipa_uc_response_hdlr(enum ipa_irq_type interrupt,
 	if (0 > feature || IPA_HW_FEATURE_MAX <= feature) {
 		IPAERR("Invalid feature %u for event %u\n",
 			feature, ipa_ctx->uc_ctx.uc_sram_mmio->eventOp);
-		IPA2_ACTIVE_CLIENTS_DEC_SIMPLE();
+		IPA_ACTIVE_CLIENTS_DEC_SIMPLE();
 		return;
 	}
 
@@ -449,7 +449,7 @@ static void ipa_uc_response_hdlr(enum ipa_irq_type interrupt,
 			IPADBG("feature %d specific response handler\n",
 				feature);
 			complete_all(&ipa_ctx->uc_ctx.uc_completion);
-			IPA2_ACTIVE_CLIENTS_DEC_SIMPLE();
+			IPA_ACTIVE_CLIENTS_DEC_SIMPLE();
 			return;
 		}
 	}
@@ -492,7 +492,7 @@ static void ipa_uc_response_hdlr(enum ipa_irq_type interrupt,
 		IPAERR("Unsupported uC rsp opcode = %u\n",
 		       ipa_ctx->uc_ctx.uc_sram_mmio->responseOp);
 	}
-	IPA2_ACTIVE_CLIENTS_DEC_SIMPLE();
+	IPA_ACTIVE_CLIENTS_DEC_SIMPLE();
 }
 
 /**
@@ -590,15 +590,17 @@ int ipa_uc_send_cmd(u32 cmd, u32 opcode, u32 expected_status,
 {
 	int index;
 	union IpaHwCpuCmdCompletedResponseData_t uc_rsp;
+	int retries = 0;
 
 	mutex_lock(&ipa_ctx->uc_ctx.uc_lock);
 
-	if (ipa_uc_state_check()) {
+	if (ipa2_uc_state_check()) {
 		IPADBG("uC send command aborted\n");
 		mutex_unlock(&ipa_ctx->uc_ctx.uc_lock);
 		return -EBADF;
 	}
 
+send_cmd:
 	init_completion(&ipa_ctx->uc_ctx.uc_completion);
 
 	ipa_ctx->uc_ctx.uc_sram_mmio->cmdParams = cmd;
@@ -658,6 +660,26 @@ int ipa_uc_send_cmd(u32 cmd, u32 opcode, u32 expected_status,
 	}
 
 	if (ipa_ctx->uc_ctx.uc_status != expected_status) {
+		if (IPA_HW_2_CPU_WDI_RX_FSM_TRANSITION_ERROR ==
+			ipa_ctx->uc_ctx.uc_status) {
+			retries++;
+			if (retries == IPA_BAM_STOP_MAX_RETRY) {
+				IPAERR("Failed after %d tries\n", retries);
+				mutex_unlock(&ipa_ctx->uc_ctx.uc_lock);
+				/*
+				 * Max retry reached,
+				 * assert to check why cmd send failed.
+				 */
+				ipa_assert();
+				return -EFAULT;
+			} else {
+				/* sleep for short period to flush IPA */
+				usleep_range(IPA_UC_WAIT_MIN_SLEEP,
+					IPA_UC_WAII_MAX_SLEEP);
+				goto send_cmd;
+			}
+		}
+
 		IPAERR("Recevied status %u, Expected status %u\n",
 			ipa_ctx->uc_ctx.uc_status, expected_status);
 		ipa_ctx->uc_ctx.pending_cmd = -1;
@@ -727,7 +749,7 @@ int ipa_uc_reset_pipe(enum ipa_client_type ipa_client)
 	 * continue with the sequence without resetting the
 	 * pipe.
 	 */
-	if (ipa_uc_state_check()) {
+	if (ipa2_uc_state_check()) {
 		IPADBG("uC interface will not be used to reset %s pipe %d\n",
 		       IPA_CLIENT_IS_PROD(ipa_client) ? "CONS" : "PROD",
 		       ep_idx);
@@ -785,7 +807,7 @@ int ipa_uc_monitor_holb(enum ipa_client_type ipa_client, bool enable)
 	 * continue with the sequence without resetting the
 	 * pipe.
 	 */
-	if (ipa_uc_state_check()) {
+	if (ipa2_uc_state_check()) {
 		IPADBG("uC interface will not be used to reset %s pipe %d\n",
 		       IPA_CLIENT_IS_PROD(ipa_client) ? "CONS" : "PROD",
 		       ep_idx);
@@ -825,9 +847,9 @@ EXPORT_SYMBOL(ipa_uc_monitor_holb);
 static void ipa_start_monitor_holb(struct work_struct *work)
 {
 	IPADBG("starting holb monitoring on IPA_CLIENT_USB_CONS\n");
-	IPA2_ACTIVE_CLIENTS_INC_SIMPLE();
+	IPA_ACTIVE_CLIENTS_INC_SIMPLE();
 	ipa_uc_monitor_holb(IPA_CLIENT_USB_CONS, true);
-	IPA2_ACTIVE_CLIENTS_DEC_SIMPLE();
+	IPA_ACTIVE_CLIENTS_DEC_SIMPLE();
 }
 
 
@@ -849,7 +871,7 @@ int ipa_uc_notify_clk_state(bool enabled)
 	 * If the uC interface has not been initialized yet,
 	 * don't notify the uC on the enable/disable
 	 */
-	if (ipa_uc_state_check()) {
+	if (ipa2_uc_state_check()) {
 		IPADBG("uC interface will not notify the UC on clock state\n");
 		return 0;
 	}

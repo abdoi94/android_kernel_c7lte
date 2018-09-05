@@ -153,14 +153,12 @@ static inline void sm5705_charger_oper_change_state(unsigned char new_status)
 		oper_info.current_table.OTG_CURRENT = sm5705_charger_operation_mode_table[i].OTG_CURRENT;
 	}
 
-	if (sm5705_call_fg_device_id() < 5) {
-		/* USB_OTG to CHG_ON work-around for BAT_REG stabilize */
-		if (oper_info.current_table.oper_mode == SM5705_CHARGER_OP_MODE_USB_OTG && \
-			sm5705_charger_operation_mode_table[i].oper_mode == SM5705_CHARGER_OP_MODE_CHG_ON) {
-			pr_info("sm5705-charger: %s: trans op_mode:suspend for BAT_REG stabilize (time=100ms)\n", __func__);
-			sm5705_charger_oper_set_mode(oper_info.i2c, SM5705_CHARGER_OP_MODE_SUSPEND);
-			msleep(100);
-		}
+	/* USB_OTG to CHG_ON work-around for BAT_REG stabilize */
+	if (oper_info.current_table.oper_mode == SM5705_CHARGER_OP_MODE_USB_OTG && \
+		sm5705_charger_operation_mode_table[i].oper_mode == SM5705_CHARGER_OP_MODE_CHG_ON) {
+		pr_info("sm5705-charger: %s: trans op_mode:suspend for BAT_REG stabilize (time=100ms)\n", __func__);
+		sm5705_charger_oper_set_mode(oper_info.i2c, SM5705_CHARGER_OP_MODE_SUSPEND);
+		msleep(100);
 	}
 
 	if (sm5705_charger_operation_mode_table[i].oper_mode != oper_info.current_table.oper_mode) {

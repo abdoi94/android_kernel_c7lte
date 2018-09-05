@@ -18,6 +18,7 @@
 
 #define pr_fmt(fmt) "%s: " fmt, __func__
 
+#include <linux/cpumask.h>
 #include <linux/device.h>
 #include <linux/io.h>
 #include <linux/kernel.h>
@@ -561,32 +562,41 @@ int cpr3_parse_common_corner_data(struct cpr3_regulator *vreg)
 		return -EINVAL;
 	}
 
-	rc = of_property_read_u32(node, "qcom,cpr-fuse-combos",
-				&max_fuse_combos);
-	if (rc) {
-		cpr3_err(vreg, "error reading property qcom,cpr-fuse-combos, rc=%d\n",
-			rc);
-		return rc;
-	}
-
 	/*
-	 * Sanity check against arbitrarily large value to avoid excessive
-	 * memory allocation.
+	 * Check if CPR3 regulator's fuse_combos_supported element is already
+	 * populated by fuse-combo-map logic. If not populated, then parse the
+	 * qcom,cpr-fuse-combos property.
 	 */
-	if (max_fuse_combos > 100 || max_fuse_combos == 0) {
-		cpr3_err(vreg, "qcom,cpr-fuse-combos is invalid: %u\n",
-			max_fuse_combos);
-		return -EINVAL;
-	}
+	if (vreg->fuse_combos_supported)
+		max_fuse_combos = vreg->fuse_combos_supported;
+	else {
+		rc = of_property_read_u32(node, "qcom,cpr-fuse-combos",
+					&max_fuse_combos);
+		if (rc) {
+			cpr3_err(vreg, "error reading property qcom,cpr-fuse-combos, rc=%d\n",
+				rc);
+			return rc;
+		}
 
-	if (vreg->fuse_combo >= max_fuse_combos) {
-		cpr3_err(vreg, "device tree config supports fuse combos 0-%u but the hardware has combo %d\n",
-			max_fuse_combos - 1, vreg->fuse_combo);
-		BUG_ON(1);
-		return -EINVAL;
-	}
+		/*
+		 * Sanity check against arbitrarily large value to avoid
+		 * excessive memory allocation.
+		 */
+		if (max_fuse_combos > 100 || max_fuse_combos == 0) {
+			cpr3_err(vreg, "qcom,cpr-fuse-combos is invalid: %u\n",
+				max_fuse_combos);
+			return -EINVAL;
+		}
 
-	vreg->fuse_combos_supported = max_fuse_combos;
+		if (vreg->fuse_combo >= max_fuse_combos) {
+			cpr3_err(vreg, "device tree config supports fuse combos 0-%u but the hardware has combo %d\n",
+				max_fuse_combos - 1, vreg->fuse_combo);
+			BUG_ON(1);
+			return -EINVAL;
+		}
+
+		vreg->fuse_combos_supported = max_fuse_combos;
+	}
 
 	of_property_read_u32(node, "qcom,cpr-speed-bins", &max_speed_bins);
 
@@ -980,6 +990,121 @@ int cpr3_parse_common_thread_data(struct cpr3_thread *thread)
 }
 
 /**
+ * cpr3_parse_irq_affinity() - parse CPR IRQ affinity information
+ * @ctrl:		Pointer to the CPR3 controller
+ *
+ * Return: 0 on success, errno on failure
+ */
+static int cpr3_parse_irq_affinity(struct cpr3_controller *ctrl)
+{
+	struct device_node *cpu_node;
+	int i, cpu;
+	int len = 0;
+
+	if (!of_find_property(ctrl->dev->of_node, "qcom,cpr-interrupt-affinity",
+				&len)) {
+		/* No IRQ affinity required */
+		return 0;
+	}
+
+	len /= sizeof(u32);
+
+	for (i = 0; i < len; i++) {
+		cpu_node = of_parse_phandle(ctrl->dev->of_node,
+					    "qcom,cpr-interrupt-affinity", i);
+		if (!cpu_node) {
+			cpr3_err(ctrl, "could not find CPU node %d\n", i);
+			return -EINVAL;
+		}
+
+		for_each_possible_cpu(cpu) {
+			if (of_get_cpu_node(cpu, NULL) == cpu_node) {
+				cpumask_set_cpu(cpu, &ctrl->irq_affinity_mask);
+				break;
+			}
+		}
+		of_node_put(cpu_node);
+	}
+
+	return 0;
+}
+
+static int cpr3_panic_notifier_init(struct cpr3_controller *ctrl)
+{
+	struct device_node *node = ctrl->dev->of_node;
+	struct cpr3_panic_regs_info *panic_regs_info;
+	struct cpr3_reg_info *regs;
+	int i, reg_count, len, rc = 0;
+
+	if (!of_find_property(node, "qcom,cpr-panic-reg-addr-list", &len)) {
+		/* panic register address list not specified */
+		return rc;
+	}
+
+	reg_count = len / sizeof(u32);
+	if (!reg_count) {
+		cpr3_err(ctrl, "qcom,cpr-panic-reg-addr-list has invalid len = %d\n",
+			len);
+		return -EINVAL;
+	}
+
+	if (!of_find_property(node, "qcom,cpr-panic-reg-name-list", NULL)) {
+		cpr3_err(ctrl, "property qcom,cpr-panic-reg-name-list not specified\n");
+		return -EINVAL;
+	}
+
+	len = of_property_count_strings(node, "qcom,cpr-panic-reg-name-list");
+	if (reg_count != len) {
+		cpr3_err(ctrl, "qcom,cpr-panic-reg-name-list should have %d strings\n",
+			reg_count);
+		return -EINVAL;
+	}
+
+	panic_regs_info = devm_kzalloc(ctrl->dev, sizeof(*panic_regs_info),
+					GFP_KERNEL);
+	if (!panic_regs_info)
+		return -ENOMEM;
+
+	regs = devm_kcalloc(ctrl->dev, reg_count, sizeof(*regs), GFP_KERNEL);
+	if (!regs)
+		return -ENOMEM;
+
+	for (i = 0; i < reg_count; i++) {
+		rc = of_property_read_string_index(node,
+				"qcom,cpr-panic-reg-name-list", i,
+				&(regs[i].name));
+		if (rc) {
+			cpr3_err(ctrl, "error reading property qcom,cpr-panic-reg-name-list, rc=%d\n",
+				rc);
+			return rc;
+		}
+
+		rc = of_property_read_u32_index(node,
+				"qcom,cpr-panic-reg-addr-list", i,
+				&(regs[i].addr));
+		if (rc) {
+			cpr3_err(ctrl, "error reading property qcom,cpr-panic-reg-addr-list, rc=%d\n",
+				rc);
+			return rc;
+		}
+		regs[i].virt_addr = devm_ioremap(ctrl->dev, regs[i].addr, 0x4);
+		if (!regs[i].virt_addr) {
+			pr_err("Unable to map panic register addr 0x%08x\n",
+				regs[i].addr);
+			return -EINVAL;
+		}
+
+		regs[i].value = 0xFFFFFFFF;
+	}
+
+	panic_regs_info->reg_count = reg_count;
+	panic_regs_info->regs = regs;
+	ctrl->panic_regs_info = panic_regs_info;
+
+	return rc;
+}
+
+/**
  * cpr3_parse_common_ctrl_data() - parse common CPR3 controller properties from
  *		device tree
  * @ctrl:		Pointer to the CPR3 controller
@@ -1045,6 +1170,10 @@ int cpr3_parse_common_ctrl_data(struct cpr3_controller *ctrl)
 	ctrl->cpr_allowed_sw = of_property_read_bool(ctrl->dev->of_node,
 			"qcom,cpr-enable");
 
+	rc = cpr3_parse_irq_affinity(ctrl);
+	if (rc)
+		return rc;
+
 	/* Aging reference voltage is optional */
 	ctrl->aging_ref_volt = 0;
 	of_property_read_u32(ctrl->dev->of_node, "qcom,cpr-aging-ref-voltage",
@@ -1101,6 +1230,8 @@ int cpr3_parse_common_ctrl_data(struct cpr3_controller *ctrl)
 			return rc;
 		}
 	}
+
+	rc = cpr3_panic_notifier_init(ctrl);
 
 	return rc;
 }
@@ -1859,3 +1990,200 @@ done:
 
 	return rc;
 }
+
+/**
+ * cpr3_parse_fuse_combo_map() - parse fuse combo map data for a CPR3 regulator
+ *		from device tree.
+ * @vreg:		Pointer to the CPR3 regulator
+ * @fuse_val:		Array of selection fuse parameter values
+ * @fuse_count:		Number of selection fuse parameters used in fuse combo
+ *			map
+ *
+ * This function reads the qcom,cpr-fuse-combo-map device tree property and
+ * populates the fuse_combo element of CPR3 regulator with the row number of
+ * fuse combo map data that matches with the data in fuse_val input array.
+ *
+ * Return: 0 on success, -ENODEV if qcom,cpr-fuse-combo-map property is not
+ *		specified in device node, other errno on failure
+ */
+int cpr3_parse_fuse_combo_map(struct cpr3_regulator *vreg, u64 *fuse_val,
+			int fuse_count)
+{
+	struct device_node *node = vreg->of_node;
+	int i, j, len, num_fuse_combos, row_size, rc = 0;
+	u32 *tmp;
+
+	if (!of_find_property(node, "qcom,cpr-fuse-combo-map", &len)) {
+		/* property not specified */
+		return -ENODEV;
+	}
+
+	row_size = fuse_count * 2;
+	if (len == 0 || len % (sizeof(u32) * row_size)) {
+		cpr3_err(vreg, "qcom,cpr-fuse-combo-map length=%d is invalid\n",
+			len);
+		return -EINVAL;
+	}
+
+	num_fuse_combos = len / (sizeof(u32) * row_size);
+	vreg->fuse_combos_supported = num_fuse_combos;
+
+	tmp = kzalloc(len, GFP_KERNEL);
+	if (!tmp)
+		return -ENOMEM;
+
+	rc = of_property_read_u32_array(node, "qcom,cpr-fuse-combo-map",
+			tmp, num_fuse_combos * row_size);
+	if (rc) {
+		cpr3_err(vreg, "could not read qcom,cpr-fuse-combo-map, rc=%d\n",
+			rc);
+		goto done;
+	}
+
+	for (i = 0; i < num_fuse_combos; i++) {
+		for (j = 0; j < fuse_count; j++) {
+			if (tmp[i * row_size + j * 2] > fuse_val[j]
+			      || tmp[i * row_size + j * 2 + 1] < fuse_val[j])
+				break;
+		}
+		if (j == fuse_count) {
+			vreg->fuse_combo = i;
+			break;
+		}
+	}
+
+	if (i >= num_fuse_combos) {
+		cpr3_err(vreg, "No matching CPR fuse combo found!\n");
+		BUG_ON(1);
+		rc = -EINVAL;
+		goto done;
+	}
+
+done:
+	kfree(tmp);
+	return rc;
+}
+
+#ifdef CONFIG_SEC_AP_HEALTH
+struct {
+	struct cpr3_controller *ctrl;
+	int *fuse_volt;
+} apps_cpr_saved_info[2];
+
+int cpr3_save_fused_open_loop_voltage(struct cpr3_regulator *vreg, int *fuse_volt)
+{
+	int id;
+
+	if (!vreg) {
+		cpr3_err(vreg, "fail to save fused open loop voltage.\n");
+		return -1;
+	}
+
+	id = vreg->thread->ctrl->ctrl_id;
+	if (id >= 2) {
+		cpr3_err(vreg, "fail to save fused open loop voltage. id(%d)\n", id);
+		return -1;
+	}
+
+	if (apps_cpr_saved_info[id].ctrl) {
+		cpr3_err(vreg, "fail to save fused open loop voltage. id(%d), ctrl(%p)\n",
+			id, apps_cpr_saved_info[id].ctrl);
+		return -1;
+	}
+
+	apps_cpr_saved_info[id].ctrl = vreg->thread->ctrl;
+
+	apps_cpr_saved_info[id].fuse_volt = kcalloc(vreg->fuse_corner_count,
+				sizeof(*fuse_volt), GFP_KERNEL);
+
+	memcpy((void *)apps_cpr_saved_info[id].fuse_volt, (void *)fuse_volt,
+		vreg->fuse_corner_count * sizeof(*fuse_volt));
+
+	return 0;
+}
+
+int cpr3_get_fuse_open_loop_voltage(int id, int fuse_corner)
+{
+	struct cpr3_controller *ctrl;
+
+	if (!apps_cpr_saved_info[id].ctrl) {
+		pr_err("%s : cpr info isn't saved. id(%d)\n", __func__, id);
+		return -1;
+	}
+
+	ctrl = apps_cpr_saved_info[id].ctrl;
+	if (fuse_corner >= ctrl->thread->vreg->fuse_corner_count) {
+		pr_err("%s : cpr info isn't saved. id(%d), corner(%d)\n",
+			__func__, id, fuse_corner);
+		return -2;
+	}
+
+	if (!apps_cpr_saved_info[id].fuse_volt) {
+		pr_err("%s : cpr info is invalid. id(%d)\n", __func__, id);
+		return -3;
+	}
+
+	return apps_cpr_saved_info[id].fuse_volt[fuse_corner];
+}
+EXPORT_SYMBOL(cpr3_get_fuse_open_loop_voltage);
+
+int cpr3_get_fuse_corner_count(int id)
+{
+	struct cpr3_controller *ctrl;
+
+	if (!apps_cpr_saved_info[id].ctrl) {
+		pr_err("%s : cpr info isn't saved. id(%d)\n", __func__, id);
+		return -1;
+	}
+
+	ctrl = apps_cpr_saved_info[id].ctrl;
+
+	if (!ctrl->thread || !ctrl->thread->vreg) {
+		pr_err("%s : cpr info is invalid. id(%d)\n", __func__, id);
+		return -2;
+	}
+
+	return ctrl->thread->vreg->fuse_corner_count;
+}
+EXPORT_SYMBOL(cpr3_get_fuse_corner_count);
+
+int cpr3_get_fuse_cpr_rev(int id)
+{
+	struct cpr3_controller *ctrl;
+
+	if (!apps_cpr_saved_info[id].ctrl) {
+		pr_err("%s : cpr info isn't saved. id(%d)\n", __func__, id);
+		return -1;
+	}
+
+	ctrl = apps_cpr_saved_info[id].ctrl;
+
+	if (!ctrl->thread || !ctrl->thread->vreg) {
+		pr_err("%s : cpr info is invalid. id(%d)\n", __func__, id);
+		return -2;
+	}
+
+	return ctrl->thread->vreg->cpr_rev_fuse;
+}
+EXPORT_SYMBOL(cpr3_get_fuse_cpr_rev);
+
+int cpr3_get_fuse_speed_bin(int id)
+{
+	struct cpr3_controller *ctrl;
+
+	if (!apps_cpr_saved_info[id].ctrl) {
+		pr_err("%s : cpr info isn't saved. id(%d)\n", __func__, id);
+		return -1;
+	}
+
+	ctrl = apps_cpr_saved_info[id].ctrl;
+
+	if (!ctrl->thread || !ctrl->thread->vreg) {
+		pr_err("%s : cpr info is invalid. id(%d)\n", __func__, id);
+		return -2;
+	}
+
+	return ctrl->thread->vreg->speed_bin_fuse;
+}
+EXPORT_SYMBOL(cpr3_get_fuse_speed_bin);
+#endif /* CONFIG_SEC_AP_HEALTH */

@@ -271,6 +271,8 @@ static int input_get_disposition(struct input_dev *dev,
 	case EV_SYN:
 		switch (code) {
 		case SYN_CONFIG:
+		case SYN_TIME_SEC:
+		case SYN_TIME_NSEC:
 			disposition = INPUT_PASS_TO_ALL;
 			break;
 
@@ -440,6 +442,7 @@ DECLARE_STATE_FUNC(idle)
 		int i;
 		pr_debug("[Input Booster] %s      State0 : Idle  index : %d, cpu : %d, time : %d, input_booster_event : %d\n", glGage, _this->index, _this->param[_this->index].cpu_freq, _this->param[_this->index].time, input_booster_event);
 		_this->index=0;
+		_this->level=-1;
 		for(i=0;i<2;i++) {
 			if(delayed_work_pending(&_this->input_booster_timeout_work[i])) {
 				pr_debug("[Input Booster] ****             cancel the pending workqueue\n");
@@ -501,7 +504,7 @@ void input_booster(struct input_dev *dev)
 {
 	int i, j, DetectedCategory = false, iTouchID = -1, iTouchSlot = -1/*,lcdoffcounter = 0*/;
 
-	for(i=0;i<input_count;i++) {
+	for (i = 0; i < input_count && i < MAX_EVENTS; i++) {
 		if (DetectedCategory) {
 			break;
 		} else if (input_events[i].type == EV_KEY) {
@@ -780,6 +783,7 @@ void input_booster_init()
 		INIT_SYSFS_DEVICE(pen)
 		INIT_SYSFS_DEVICE(hover)
 	}
+	pm_qos_add_request(&lpm_bias_pm_qos_request, PM_QOS_HIST_BIAS, PM_QOS_DEFAULT_VALUE);
 }
 #endif  // Input Booster -
 
@@ -804,6 +808,7 @@ void input_event(struct input_dev *dev,
 		 unsigned int type, unsigned int code, int value)
 {
 	unsigned long flags;
+	int idx;
 
 	if (is_event_supported(type, dev->evbit, EV_MAX)) {
 
@@ -817,14 +822,17 @@ void input_event(struct input_dev *dev,
 				pr_debug("[Input Booster1] ==============================================\n");
 				input_booster(dev);
 				input_count=0;
-			} else {
+			} else if (input_count < MAX_EVENTS) {
 				pr_debug("[Input Booster1] type = %x, code = %x, value =%x\n", type, code, value);
-				input_events[input_count].type = type;
-				input_events[input_count].code = code;
-				input_events[input_count].value = value;
-				if(input_count < MAX_EVENTS) {
-					input_count++;
+				idx = input_count;
+				input_events[idx].type = type;
+				input_events[idx].code = code;
+				input_events[idx].value = value;
+				if (idx < MAX_EVENTS) {
+					input_count = idx + 1 ;
 				}
+			} else {
+				pr_debug("[Input Booster1] type = %x, code = %x, value =%x   Booster Event Exceeded\n", type, code, value);
 			}
 		}
 #endif  // Input Booster -
@@ -1071,6 +1079,8 @@ static int input_enable_device(struct input_dev *dev)
 	retval = mutex_lock_interruptible(&dev->mutex);
 	if (retval)
 		return retval;
+	if (!dev->disabled)
+		goto out;
 	if (!dev->disabled)
 		goto out;
 	if (dev->users_private && dev->open) {
@@ -1836,6 +1846,25 @@ static ssize_t input_dev_show_enabled(struct device *dev,
 	return scnprintf(buf, PAGE_SIZE, "%d\n", !input_dev->disabled);
 }
 
+static void configure_pinctrl(struct device *dev, bool enable)
+{
+	struct pinctrl_state *state;
+	struct pinctrl *p;
+	int ret;
+
+	p = dev->pins->p;
+	if (enable)
+		state = pinctrl_lookup_state(p, PINCTRL_STATE_IDLE);
+	else
+		state = pinctrl_lookup_state(p, PINCTRL_STATE_SLEEP);
+
+	if (!IS_ERR(state)) {
+		ret = pinctrl_select_state(p, state);
+		if (ret)
+			dev_err(dev, "failed to activate pinctrl state\n");
+	}
+}
+
 static ssize_t input_dev_store_enabled(struct device *dev,
 				       struct device_attribute *attr,
 				       const char *buf, size_t size)
@@ -1843,6 +1872,8 @@ static ssize_t input_dev_store_enabled(struct device *dev,
 	int ret;
 	bool enable;
 	struct input_dev *input_dev = to_input_dev(dev);
+	struct device *parent_dev = input_dev->dev.parent;
+
 	pr_info("mms input_dev_store_enabled\n");
 	ret = strtobool(buf, &enable);
 	if (ret)
@@ -1852,8 +1883,12 @@ static ssize_t input_dev_store_enabled(struct device *dev,
 		ret = input_enable_device(input_dev);
 	else
 		ret = input_disable_device(input_dev);
+
 	if (ret)
 		return ret;
+
+	if (parent_dev && parent_dev->pins && !input_dev->lowpower_mode)
+		configure_pinctrl(parent_dev, enable);
 
 	return size;
 }
@@ -2159,12 +2194,6 @@ static int input_dev_suspend(struct device *dev)
 	struct input_dev *input_dev = to_input_dev(dev);
 
 	spin_lock_irq(&input_dev->event_lock);
-
-	/*
-	 * Keys that are pressed now are unlikely to be
-	 * still pressed when we resume.
-	 */
-	input_dev_release_keys(input_dev);
 
 	/* Turn off LEDs and sounds, if any are active. */
 	input_dev_toggle(input_dev, false);
@@ -2914,6 +2943,7 @@ static int __init input_init(void)
 static void __exit input_exit(void)
 {
 	input_proc_exit();
+	pm_qos_remove_request(&lpm_bias_pm_qos_request);
 	unregister_chrdev_region(MKDEV(INPUT_MAJOR, 0),
 				 INPUT_MAX_CHAR_DEVICES);
 	class_unregister(&input_class);

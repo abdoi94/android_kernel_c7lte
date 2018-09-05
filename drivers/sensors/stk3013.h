@@ -1,9 +1,5 @@
 /*
  *
- * $Id: stk3013.h
- *
- * Copyright (C) 2012~2015 Lex Hsieh     <lex_hsieh@sensortek.com.tw>
- *
  * This file is subject to the terms and conditions of the GNU General Public
  * License.  See the file COPYING in the main directory of this archive for
  * more details.
@@ -13,8 +9,7 @@
 #define __STK3013_H__
 
 /* platform data */
-struct stk3013_platform_data
-{
+struct stk3013_platform_data {
 	uint8_t state_reg;
 	uint8_t psctrl_reg;
 	uint8_t alsctrl_reg;
@@ -30,5 +25,7 @@ struct stk3013_platform_data
 	int int_pin;
 	uint32_t transmittance;
 	uint32_t int_flags;
+	int vled_ldo;  /* gpio pin to control power */
+	uint32_t regulator_divided; /* 1: vdd & vled share the same power supply, 0: vdd & vled uses difference power supply */
 };
-#endif // __STK3013_H__
+#endif

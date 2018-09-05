@@ -25,15 +25,24 @@
 struct muic_data_t;
 
 /* SM5705 AFC CTRL register */
+#define AFCCTRL_ENQC20		 6
 #define AFCCTRL_DIS_AFC		5
 #define AFCCTRL_VBUS_READ    3
 #define AFCCTRL_DM_RESET     2
 #define AFCCTRL_DP_RESET     1
 #define AFCCTRL_ENAFC        0
 
+enum {
+	AFC_5V	= 5,
+	AFC_9V	= 9,
+};
+
 int muic_check_afc_state(int state);
 int muic_torch_prepare(int state);
+int muic_restart_afc(void);
 void muic_init_afc_state(muic_data_t *pmuic);
+int muic_afc_set_voltage(int voltage);
 void muic_afc_delay_check_state(int state);
+int muic_dpreset_afc(void);
 
 #endif /* __MUIC_AFC_H__ */

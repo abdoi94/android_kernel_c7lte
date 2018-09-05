@@ -424,8 +424,8 @@ static unsigned char _calc_FASTCHG_current_offset_to_mA(unsigned short mA)
 {
 	unsigned char offset;
 
-	if (mA < 100) {
-		offset = 0x00;
+	if (mA < 200) {
+		offset = 0x02;
 	} else {
 		mA = (mA > 3250) ? 3250 : mA;
 		offset = ((mA - 100) / 50) & 0x3F;
@@ -589,7 +589,8 @@ static bool sm5705_charger_get_discharging_force_status(struct sm5705_charger_da
 	else
 		return false;
 }
-
+#endif
+#if defined(CONFIG_BATTERY_SWELLING_SELF_DISCHARGING) || defined(CONFIG_SEC_FACTORY)
 static void sm5705_charger_en_discharging_force(struct sm5705_charger_data *charger, bool enable)
 {
 	unsigned char reg;
@@ -608,6 +609,20 @@ static void sm5705_charger_en_discharging_force(struct sm5705_charger_data *char
 	reg = sm5705_CHG_read_reg(charger, SM5705_REG_FACTORY);
 	pr_info("enable(%s), reg[0x%02X]:0x%02x\n",
 		enable ? "ON" : "OFF", SM5705_REG_FACTORY, reg);
+}
+#endif
+
+#if defined(CONFIG_SEC_FACTORY)
+static void sm5705_dis_discharging_force_work(struct work_struct *work)
+{
+	struct sm5705_charger_data *charger =
+		container_of(work, struct sm5705_charger_data, dis_discharging_force_work.work);
+
+	pr_info("schedule work start.\n");
+
+	sm5705_charger_en_discharging_force(charger, false);
+	
+	pr_info("schedule work done.\n");
 }
 #endif
 
@@ -839,7 +854,6 @@ static int sm5705_chg_set_property(struct power_supply *psy,
 {
 	struct sm5705_charger_data *charger =
 		container_of(psy, struct sm5705_charger_data, psy_chg);
-	int buck_state = ENABLE;
 	unsigned int prev_cable_type = charger->cable_type;;
 
 	switch (psp) {
@@ -914,7 +928,6 @@ static int sm5705_chg_set_property(struct power_supply *psy,
 		charger->charge_mode = val->intval;
 		switch (charger->charge_mode) {
 		case SEC_BAT_CHG_MODE_BUCK_OFF:
-			buck_state = DISABLE;
 		case SEC_BAT_CHG_MODE_CHARGING_OFF:
 			charger->is_charging = false;
 			break;
@@ -1730,7 +1743,6 @@ static sec_charger_platform_data_t *_get_sm5705_charger_platform_data
 	}
 #else
 	struct sm5705_platform_data *sm5705_pdata = dev_get_platdata(sm5705->dev);
-	struct sm5705_dev *sm5705 = dev_get_drvdata(pdev->dev.parent);
 	sec_charger_platform_data_t *pdata;
 
 	pdata = sm5705_pdata->charger_data;
@@ -1793,7 +1805,9 @@ static int _init_sm5705_charger_info(struct platform_device *pdev,
 	INIT_DELAYED_WORK(&charger->topoff_work, sm5705_topoff_work);
 #endif
 	INIT_DELAYED_WORK(&charger->op_mode_switch_work, sm5705_op_mode_switch_work);
-
+#if defined(CONFIG_SEC_FACTORY)
+	INIT_DELAYED_WORK(&charger->dis_discharging_force_work, sm5705_dis_discharging_force_work);
+#endif
 #if defined(SM5705_SW_SOFT_START)
 	wake_lock_init(&charger->softstart_wake_lock, WAKE_LOCK_SUSPEND, "charger-softstart");
 #endif
@@ -1824,9 +1838,15 @@ static void sm5705_charger_initialize(struct sm5705_charger_data *charger)
 		charger->pdata->chg_float_voltage);
 
 	/* Auto-Stop configuration for Emergency status */
-	sm5705_CHG_set_TOPOFF(charger, 300);
+	sm5705_CHG_set_TOPOFF(charger, 200);
 	sm5705_CHG_set_TOPOFF_TMR(charger, SM5705_TOPOFF_TIMER_45m);
 	sm5705_CHG_enable_AUTOSTOP(charger, 1);
+#if defined(CONFIG_SEC_FACTORY)
+	pr_info("queue_delayed_work, dis_discharging_force_work\n");
+	cancel_delayed_work(&charger->dis_discharging_force_work);
+	queue_delayed_work(charger->wqueue, &charger->dis_discharging_force_work,
+			msecs_to_jiffies(20000)); /* delay 20sec */
+#endif
 
 	sm5705_CHG_set_BATREG(charger, charger->pdata->chg_float_voltage);
 
@@ -1862,7 +1882,6 @@ static void sm5705_charger_initialize(struct sm5705_charger_data *charger)
 static int sm5705_charger_probe(struct platform_device *pdev)
 {
 	struct sm5705_dev *sm5705 = dev_get_drvdata(pdev->dev.parent);
-	struct sm5705_platform_data *pdata = dev_get_platdata(sm5705->dev);
 	struct sm5705_charger_data *charger;
 	int ret = 0;
 
@@ -1972,9 +1991,7 @@ err_power_supply_register_chg:
 	power_supply_unregister(&charger->psy_chg);
 err_power_supply_register:
 	destroy_workqueue(charger->wqueue);
-#ifdef CONFIG_OF
-	kfree(pdata->charger_data);
-#endif
+
 	mutex_destroy(&charger->charger_mutex);
 err_free:
 	kfree(charger);
@@ -1996,6 +2013,9 @@ static int sm5705_charger_remove(struct platform_device *pdev)
 	cancel_delayed_work(&charger->topoff_work);
 #endif
 	cancel_delayed_work(&charger->op_mode_switch_work);
+#if defined(CONFIG_SEC_FACTORY)
+	cancel_delayed_work(&charger->dis_discharging_force_work);
+#endif
 	destroy_workqueue(charger->wqueue);
 #if defined(SM5705_USED_WIRELESS_CHARGER)
 	free_irq(charger->irq_wpcin_pok, NULL);
@@ -2019,7 +2039,7 @@ static void sm5705_charger_shutdown(struct device *dev)
 	struct sm5705_charger_data *charger = dev_get_drvdata(dev);
 
 #if defined(CONFIG_BATTERY_SWELLING_SELF_DISCHARGING)
-	sm5705_charger_en_discharing_force(charger, false);
+	sm5705_charger_en_discharging_force(charger, false);
 #endif
 	sm5705_update_reg(charger->i2c, SM5705_REG_CNTL,
 			SM5705_CHARGER_OP_MODE_CHG_ON, 0x07);

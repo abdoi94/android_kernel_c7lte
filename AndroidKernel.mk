@@ -124,9 +124,11 @@ fi
 endef
 
 ifneq ($(KERNEL_LEGACY_DIR),true)
-$(KERNEL_USR): $(TARGET_PREBUILT_INT_KERNEL)
+$(KERNEL_USR): $(KERNEL_HEADERS_INSTALL)
 	rm -rf $(KERNEL_SYMLINK)
 	ln -s kernel/$(TARGET_KERNEL) $(KERNEL_SYMLINK)
+
+$(TARGET_PREBUILT_INT_KERNEL): $(KERNEL_USR)
 endif
 
 #Tweak defconfig for FACTORY KERNEL without additional fac_defcofig
@@ -138,6 +140,16 @@ endef
 define modi-facdefconfig
 chmod 664 kernel/arch/arm/configs/$(VARIANT_DEFCONFIG)
 echo -e "\nCONFIG_SEC_FACTORY=y" >> kernel/arch/arm/configs/$(VARIANT_DEFCONFIG)
+endef
+
+define modi-shipdefconfig64
+chmod 664 kernel/arch/arm64/configs/$(VARIANT_DEFCONFIG)
+echo -e "\nCONFIG_SAMSUNG_PRODUCT_SHIP=y" >> kernel/arch/arm64/configs/$(VARIANT_DEFCONFIG)
+endef
+
+define modi-shipdefconfig
+chmod 664 kernel/arch/arm/configs/$(VARIANT_DEFCONFIG)
+echo -e "\nCONFIG_SAMSUNG_PRODUCT_SHIP=y" >> kernel/arch/arm/configs/$(VARIANT_DEFCONFIG)
 endef
 
 $(KERNEL_OUT):
@@ -155,7 +167,7 @@ $(TARGET_PREBUILT_INT_KERNEL): $(KERNEL_OUT) $(KERNEL_HEADERS_INSTALL)
 	$(hide) rm -rf $(KERNEL_OUT)/arch/$(KERNEL_ARCH)/boot/dts
 	$(MAKE) -C $(TARGET_KERNEL_SOURCE) O=$(BUILD_ROOT_LOC)$(KERNEL_OUT) ARCH=$(KERNEL_ARCH) CROSS_COMPILE=$(KERNEL_CROSS_COMPILE) $(KERNEL_CFLAGS)
 	$(MAKE) -C $(TARGET_KERNEL_SOURCE) O=$(BUILD_ROOT_LOC)$(KERNEL_OUT) ARCH=$(KERNEL_ARCH) CROSS_COMPILE=$(KERNEL_CROSS_COMPILE) $(KERNEL_CFLAGS) modules
-	$(MAKE) -C $(TARGET_KERNEL_SOURCE) O=$(BUILD_ROOT_LOC)$(KERNEL_OUT) INSTALL_MOD_PATH=../../$(KERNEL_MODULES_INSTALL) INSTALL_MOD_STRIP=1 ARCH=$(KERNEL_ARCH) CROSS_COMPILE=$(KERNEL_CROSS_COMPILE) modules_install
+	$(MAKE) -C $(TARGET_KERNEL_SOURCE) O=$(BUILD_ROOT_LOC)$(KERNEL_OUT) INSTALL_MOD_PATH=$(BUILD_ROOT_LOC)../$(KERNEL_MODULES_INSTALL) INSTALL_MOD_STRIP=1 ARCH=$(KERNEL_ARCH) CROSS_COMPILE=$(KERNEL_CROSS_COMPILE) modules_install
 	$(mv-modules)
 	$(clean-module-folder)
 
@@ -167,13 +179,20 @@ else
 	$(modi-facdefconfig)
 endif
 endif
+ifeq ($(SEC_PRODUCT_SHIP), true)
+ifeq ($(KERNEL_ARCH),arm64)
+	$(modi-shipdefconfig64)
+else
+	$(modi-shipdefconfig)
+endif
+endif
 	$(hide) if [ ! -z "$(KERNEL_HEADER_DEFCONFIG)" ]; then \
-			$(hide) rm -f $(BUILD_ROOT_LOC)$(KERNEL_CONFIG); \
+			rm -f $(BUILD_ROOT_LOC)$(KERNEL_CONFIG); \
 			$(MAKE) -C $(TARGET_KERNEL_SOURCE) O=$(BUILD_ROOT_LOC)$(KERNEL_OUT) ARCH=$(KERNEL_HEADER_ARCH) CROSS_COMPILE=$(KERNEL_CROSS_COMPILE) $(KERNEL_HEADER_DEFCONFIG); \
 			$(MAKE) -C $(TARGET_KERNEL_SOURCE) O=$(BUILD_ROOT_LOC)$(KERNEL_OUT) ARCH=$(KERNEL_HEADER_ARCH) CROSS_COMPILE=$(KERNEL_CROSS_COMPILE) headers_install; fi
 	$(hide) if [ "$(KERNEL_HEADER_DEFCONFIG)" != "$(KERNEL_DEFCONFIG)" ]; then \
 			echo "Used a different defconfig for header generation"; \
-			$(hide) rm -f $(BUILD_ROOT_LOC)$(KERNEL_CONFIG); \
+			rm -f $(BUILD_ROOT_LOC)$(KERNEL_CONFIG); \
 			$(MAKE) -C $(TARGET_KERNEL_SOURCE) O=$(BUILD_ROOT_LOC)$(KERNEL_OUT) ARCH=$(KERNEL_ARCH) CROSS_COMPILE=$(KERNEL_CROSS_COMPILE) $(KERNEL_DEFCONFIG); fi
 	$(hide) if [ ! -z "$(KERNEL_CONFIG_OVERRIDE)" ]; then \
 			echo "Overriding kernel config with '$(KERNEL_CONFIG_OVERRIDE)'"; \
@@ -188,7 +207,7 @@ kernelconfig: $(KERNEL_OUT) $(KERNEL_CONFIG)
 	     $(MAKE) -C $(TARGET_KERNEL_SOURCE) O=$(BUILD_ROOT_LOC)$(KERNEL_OUT) ARCH=$(KERNEL_ARCH) CROSS_COMPILE=$(KERNEL_CROSS_COMPILE) menuconfig
 	env KCONFIG_NOTIMESTAMP=true \
 	     $(MAKE) -C $(TARGET_KERNEL_SOURCE) O=$(BUILD_ROOT_LOC)$(KERNEL_OUT) ARCH=$(KERNEL_ARCH) CROSS_COMPILE=$(KERNEL_CROSS_COMPILE) savedefconfig
-	cp $(KERNEL_OUT)/defconfig kernel/arch/$(KERNEL_ARCH)/configs/$(KERNEL_DEFCONFIG)
+	cp $(KERNEL_OUT)/defconfig $(TARGET_KERNEL_SOURCE)/arch/$(KERNEL_ARCH)/configs/$(KERNEL_DEFCONFIG)
 
 endif
 endif

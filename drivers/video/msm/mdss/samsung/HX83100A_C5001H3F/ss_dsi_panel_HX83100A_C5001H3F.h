@@ -33,8 +33,8 @@ Copyright (C) 2012, Samsung Electronics. All rights reserved.
 #define SS_DSI_PANEL_HX83100A_C5001H3F_H
 
 #include "../ss_dsi_panel_common.h"
+#include "../ss_regulator_common.h"
 
 #define HX83100A_C5001H3F_SUPPORT_PANEL_COUNT 1
 
-extern int isl98611_backlight_control(struct mdss_dsi_ctrl_pdata *ctrl, int enable);
 #endif

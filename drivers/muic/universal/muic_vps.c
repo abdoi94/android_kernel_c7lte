@@ -30,6 +30,7 @@
 #include <linux/host_notify.h>
 
 #include <linux/muic/muic.h>
+#include <linux/usb_notify.h>
 
 #if defined(CONFIG_MUIC_NOTIFIER)
 #include <linux/muic/muic_notifier.h>
@@ -44,6 +45,8 @@
 #include "muic_apis.h"
 #include "muic_i2c.h"
 #include "muic_vps.h"
+#include "muic_regmap.h"
+#include "muic_ccic.h"
 
 /* Device Type 1 register */
 #define DEV_TYPE1_USB_OTG		(0x1 << 7)
@@ -77,7 +80,7 @@
 #define DEV_TYPE3_AV_WITH_VBUS		(0x1 << 4)
 #define DEV_TYPE3_NO_STD_CHG		(0x1 << 2)
 #define DEV_TYPE3_MHL			(0x1 << 0)
-#if defined(CONFIG_MUIC_UNIVERSAL_SM5705)
+#if defined(CONFIG_MUIC_UNIVERSAL_SM5705) || defined(CONFIG_MUIC_UNIVERSAL_SM5708)
 #define DEV_TYPE3_LO_TA			(0x1 << 5)
 #define DEV_TYPE3_CHG_TYPE	(DEV_TYPE3_U200_CHG | DEV_TYPE3_NO_STD_CHG | \
 				DEV_TYPE3_LO_TA)
@@ -87,19 +90,19 @@
 
 static struct vps_cfg cfg_MHL = {
 	.name = "MHL",
-	.attr = MATTR(VCOM_OPEN, VB_ANY)
+	.attr = MATTR(VCOM_OPEN, VB_ANY),
 };
 static struct vps_cfg cfg_SEND = {
 	.name = "SEND",
-	.attr = MATTR(VCOM_AUDIO, VB_ANY)
+	.attr = MATTR(VCOM_AUDIO, VB_ANY),
 };
 static struct vps_cfg cfg_VOLDN = {
 	.name = "VOLDN",
-	.attr = MATTR(VCOM_AUDIO, VB_ANY)
+	.attr = MATTR(VCOM_AUDIO, VB_ANY),
 };
 static struct vps_cfg cfg_VOLUP = {
 	.name = "VOLUP",
-	.attr = MATTR(VCOM_AUDIO, VB_ANY)
+	.attr = MATTR(VCOM_AUDIO, VB_ANY),
 };
 static struct vps_cfg cfg_OTG = {
 	.name = "OTG",
@@ -153,6 +156,12 @@ static struct vps_cfg cfg_TYPE2_CHG = {
 	.name = "TYPE2 Charger",
 	.attr = MATTR(VCOM_OPEN, VB_ANY),
 };
+#ifdef CONFIG_MUIC_SM570X_SWITCH_CONTROL_GPIO
+static struct vps_cfg cfg_JIG_UART_CABLE = {
+	.name = "Jig UART Cable(150K)",
+	.attr = MATTR(VCOM_UART, VB_ANY) | MATTR_FACT_SUPP,
+};
+#endif
 static struct vps_cfg cfg_JIG_UART_OFF = {
 	.name = "Jig UART Off",
 	.attr = MATTR(VCOM_UART, VB_ANY) | MATTR_FACT_SUPP,
@@ -164,7 +173,7 @@ static struct vps_cfg cfg_JIG_UART_ON = {
 };
 static struct vps_cfg cfg_EARJACK = {
 	.name = "EAR JACK",
-	.attr = MATTR(VCOM_USB, VB_ANY) | MATTR_SUPP,
+	.attr = MATTR(VCOM_AUDIO, VB_ANY),
 };
 static struct vps_cfg cfg_TA = {
 	.name = "TA",
@@ -198,7 +207,10 @@ static struct vps_tbl_data vps_table[] = {
 	[MDEV(USB_LANHUB)]		= {0x13, "80.07K",	&cfg_USB_LANHUB,},
 	[MDEV(CHARGING_CABLE)]	= {0x14, "102K",	&cfg_CHARGING_CABLE,},
 	[MDEV(GAMEPAD)]		= {0x15, "121K",	&cfg_GAMEPAD,},
+#ifdef CONFIG_MUIC_SM570X_SWITCH_CONTROL_GPIO
 	/* 0x16: UART Cable */
+	[MDEV(UART)]	= {0x16, "150K",    &cfg_JIG_UART_CABLE,},
+#endif
 	/* 0x17: CEA-936A Type 1 Charger */
 	[MDEV(JIG_USB_OFF)]		= {0x18, "255K",	&cfg_JIG_USB_OFF,},
 	[MDEV(JIG_USB_ON)]		= {0x19, "301K",	&cfg_JIG_USB_ON,},
@@ -209,6 +221,9 @@ static struct vps_tbl_data vps_table[] = {
 	[MDEV(EARJACK)]		= {0x1e, "1M",	&cfg_EARJACK,},	/* 0x1e : Audio Mode with Remote */
 	[MDEV(TA)]			= {0x1f, "OPEN",	&cfg_TA,},
 	[MDEV(USB)]			= {0x1f, "OPEN",	&cfg_USB,},
+#ifndef CONFIG_MUIC_SUPPORT_CCIC
+	[MDEV(UNOFFICIAL_ID_USB)]	= {0x1f, "OPEN",	&cfg_USB,},
+#endif	
 	[MDEV(CDP)]			= {0x1f, "OPEN",	&cfg_CDP,},
 	[MDEV(UNDEFINED_CHARGING)]	= {0xfe, "UNDEFINED",	&cfg_UNDEFINED_CHARGING,},
 	[ATTACHED_DEV_NUM]		= {0x00, "NUM", NULL,},
@@ -220,7 +235,18 @@ struct vps_tbl_data * mdev_to_vps(muic_attached_dev_t mdev)
 		pr_err("%s Out of range mdev=%d\n", __func__, mdev);
 		return NULL;
 	}
-
+#if defined(CONFIG_MUIC_SUPPORT_EARJACK)
+#if defined(CONFIG_MUIC_UNIVERSAL_SM5703)
+	if (mdev == MDEV(LP_SEND) || mdev == MDEV(LR_SEND))
+		mdev = MDEV(SEND);
+	else if (mdev == MDEV(LP_VOLUP) || mdev == MDEV(LR_VOLUP))
+		mdev = MDEV(VOLUP);
+	else if (mdev == MDEV(LP_VOLDN) || mdev == MDEV(LR_VOLDN))
+		mdev = MDEV(VOLDN);
+	else if (mdev == ATTACHED_ERROR_EARJACK_MUIC || mdev == ATTACHED_STUCK_EARJACK_MUIC)
+		mdev = MDEV(EARJACK);
+#endif
+#endif
 	return &vps_table[mdev];
 }
 
@@ -257,14 +283,19 @@ bool vps_is_supported_dev(muic_attached_dev_t mdev)
 	struct vps_tbl_data *pvps = mdev_to_vps(mdev);
 	int attr;
 
-	if (!pvps || !pvps->cfg)
+	if (!pvps || !pvps->cfg) {
+		pr_info("%s: unavailable vps_tbl_data[%d]\n", __func__, mdev);
 		return false;
+	}
 
 	attr = pvps->cfg->attr;
 
-	if (MATTR_TO_SUPP(attr))
+	if (MATTR_TO_SUPP(attr)) {
+		pr_info("%s: vps_table[%s] is set\n", __func__, pvps->cfg->name);
 		return true;
+	}
 
+	pr_info("%s: attr = 0x%x -> not support\n", __func__, attr);
 	return false;
 }
 
@@ -553,7 +584,7 @@ static int resolve_dedicated_dev(muic_data_t *pmuic, muic_attached_dev_t *pdev, 
 	int twin_mdev = 0;
 
 #if defined(CONFIG_MUIC_UNIVERSAL_SM5504)
-	new_dev = pmuic->vps.t.attached_dev;
+	new_dev = pmuic->vps.s.attached_dev;
 	if (new_dev != ATTACHED_DEV_UNKNOWN_MUIC)
 		intr = MUIC_INTR_ATTACH;
 	adc = pmuic->vps.s.adc;
@@ -561,6 +592,11 @@ static int resolve_dedicated_dev(muic_data_t *pmuic, muic_attached_dev_t *pdev, 
 #else
 	int val1, val2, val3;
 
+#if defined(CONFIG_MUIC_SM570X_SWITCH_CONTROL_GPIO) && defined(CONFIG_MUIC_UNIVERSAL_SM5703)
+	int is_UPSM = 0;
+	struct vendor_ops *pvendor = pmuic->regmapdesc->vendorops;
+	struct otg_notify *o_notify = get_otg_notify();
+#endif
 	val1 = pmuic->vps.s.val1;
 	val2 = pmuic->vps.s.val2;
 	val3 = pmuic->vps.s.val3;
@@ -630,12 +666,19 @@ static int resolve_dedicated_dev(muic_data_t *pmuic, muic_attached_dev_t *pdev, 
 	if (val3 & DEV_TYPE3_CHG_TYPE)
 	{
 		intr = MUIC_INTR_ATTACH;
-
-		if (val3 & DEV_TYPE3_NO_STD_CHG) {
+		if ((val3 & DEV_TYPE3_NO_STD_CHG)
+#if defined(CONFIG_MUIC_SM570X_SWITCH_CONTROL_GPIO)			
+			&& (adc != ADC_UART_CABLE)
+#endif			
+			){
+#if defined(CONFIG_MUIC_SUPPORT_CCIC)
 			new_dev = ATTACHED_DEV_USB_MUIC;
+#else			
+			new_dev = ATTACHED_DEV_UNOFFICIAL_ID_USB_MUIC;
+#endif			
 			pr_info("%s : TYPE3 DCD_OUT_TIMEOUT DETECTED\n", MUIC_DEV_NAME);
-
-		} else {
+		} else 
+		{
 			new_dev = ATTACHED_DEV_TA_MUIC;
 			pr_info("%s : TYPE3_CHARGER DETECTED\n", MUIC_DEV_NAME);
 		}
@@ -725,9 +768,13 @@ static int resolve_dedicated_dev(muic_data_t *pmuic, muic_attached_dev_t *pdev, 
 #if defined(CONFIG_MUIC_SUPPORT_EARJACK)
 			/* USB Ear Jack */
 		case ADC_EARJACK:
-			intr = MUIC_INTR_ATTACH;
-			new_dev = ATTACHED_DEV_EARJACK_MUIC;
-			pr_info("%s : ADC_EARJACK DETECTED\n", MUIC_DEV_NAME);
+			if (vbvolt) {
+				intr = MUIC_INTR_ATTACH;
+				new_dev = ATTACHED_DEV_UNDEFINED_CHARGING_MUIC;
+			} else {
+				intr = MUIC_INTR_ATTACH;
+				new_dev = get_attached_earjack_type(pmuic);
+			}
 			break;
 #endif
 #ifdef CONFIG_MUIC_SM5703_SUPPORT_AUDIODOCK
@@ -780,6 +827,28 @@ static int resolve_dedicated_dev(muic_data_t *pmuic, muic_attached_dev_t *pdev, 
 			pr_info("%s : ADC HMT DETECTED\n", MUIC_DEV_NAME);
 			break;
 
+#if defined(CONFIG_MUIC_SM570X_SWITCH_CONTROL_GPIO)	
+		case ADC_UART_CABLE:
+		    new_dev = ATTACHED_DEV_UART_MUIC;
+		    intr = MUIC_INTR_ATTACH;
+/* SM5703 LanHub patch for CCIC
+ * When UPSM mode, It should not VBUS_FET reset.
+ */
+#if defined(CONFIG_MUIC_UNIVERSAL_SM5703)
+			is_UPSM = is_blocked(o_notify, NOTIFY_BLOCK_TYPE_ALL);
+			if (muic_get_current_legacy_dev(pmuic) == ATTACHED_DEV_OTG_MUIC) {
+				pr_info("%s : OTG DETECTED (%d)\n", __func__, is_UPSM);
+				if (!is_UPSM) {
+					pr_info("%s : reset vbus path\n", __func__);
+					pvendor->reset_vbus_path(pmuic->regmapdesc);
+				}
+			}
+			else
+#endif
+				pr_info("%s : ADC UART(150K) DETECTED\n", MUIC_DEV_NAME);
+		    break;
+#endif
+
 		default:
 			pr_warn("%s:%s unsupported ADC(0x%02x)\n", MUIC_DEV_NAME,
 				__func__, adc);
@@ -795,13 +864,13 @@ static int resolve_dedicated_dev(muic_data_t *pmuic, muic_attached_dev_t *pdev, 
 
 	/* Check it the cable type is supported.
 	  */
-
+	pr_info("%s:processed --> new_dev %d intr %d\n", __func__, new_dev, intr);
 	if (vps_is_supported_dev(new_dev)) {
 		if ((twin_mdev = resolve_twin_mdev(new_dev, vbvolt))) {
 			new_dev = twin_mdev;
 			pr_info("%s:Supported twin mdev-> %d\n", __func__, twin_mdev);
 		} else
-			pr_info("%s:Supported.\n", __func__);
+			pr_info("%s:Supported.(%d)\n", __func__, new_dev);
 	} else if(vbvolt && (intr == MUIC_INTR_ATTACH)) {
 		new_dev = ATTACHED_DEV_UNDEFINED_CHARGING_MUIC;
 		pr_info("%s:Unsupported->UNDEFINED_CHARGING\n", __func__);

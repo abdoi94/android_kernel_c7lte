@@ -134,6 +134,13 @@ void mms_input_event_handler(struct mms_ts_info *info, u8 sz, u8 *buf)
 
 		int palm = (tmp[0] & MIP_EVENT_INPUT_PALM) >> 4;
 
+		// add defend code to avoid finger array break mms_ts_info, at this case info->event_size will become 0 and for loop cause watchdog upload
+		if(id < 0) {
+			input_err(true, &client->dev, "%s strange id value: [%d, %d, %d, %d, %d, %d, %d, %d]\n", __func__, 
+				tmp[0], tmp[1], tmp[2], tmp[3], tmp[4], tmp[5], tmp[6], tmp[7]);
+			continue;
+		}
+
 		// Report input data
 #if MMS_USE_TOUCHKEY
 		if ((tmp[0] & MIP_EVENT_INPUT_SCREEN) == 0) {
@@ -580,6 +587,45 @@ int mms_lowpower_mode(struct mms_ts_info *info, int on)
 		return -EIO;
 	}
 
+#ifdef CONFIG_TOUCHSCREEN_MELFAS_AOT
+	// set AOD or SPAY bit
+	wbuf[0] = MIP_R0_AOT;
+	wbuf[1] = MIP_R0_AOT_CTRL;
+	if (mms_i2c_read(info, wbuf, 2, rbuf, 1)) {
+		input_err(true, &info->client->dev, "%s [ERROR] read %x %x, rbuf %x\n",
+				__func__, wbuf[0], wbuf[1], rbuf[0]);
+		return -EIO;
+	}
+
+	input_info(true, &info->client->dev, "%s: AOT ctrl register=%x, flag=%x", __func__, rbuf[0], info->lowpower_flag);
+
+	wbuf[2] = rbuf[0] & (info->lowpower_flag << 1);
+
+	wbuf[0] = MIP_R0_AOT;
+	wbuf[1] = MIP_R0_AOT_CTRL;
+
+	if (mms_i2c_write(info, wbuf, 3)) {
+		input_err(true, &info->client->dev, "%s [ERROR] write %x %x %x\n",
+				__func__, wbuf[0], wbuf[1], wbuf[2]);
+		return -EIO;
+	}
+
+	msleep(20);
+
+	if (mms_i2c_read(info, wbuf, 2, rbuf, 1)) {
+		input_err(true, &info->client->dev, "%s [ERROR] read %x %x, rbuf %x\n",
+				__func__, wbuf[0], wbuf[1], rbuf[0]);
+		return -EIO;
+	}
+
+	input_info(true, &info->client->dev, "%s: AOT ctrl register=%x", __func__, rbuf[0]);
+
+	if (rbuf[0] != wbuf[2]) {
+		input_err(true, &info->client->dev, "%s [ERROR] not changed to %x mode, rbuf %x\n",
+				__func__, wbuf[2], rbuf[0]);
+		return -EIO;
+	}
+#endif
 	input_info(true, &info->client->dev, "%s: %s mode", __func__, on ? "LPM" : "normal");
 	return 0;
 }

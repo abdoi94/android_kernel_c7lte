@@ -972,7 +972,7 @@ static int ak09916c_probe(struct i2c_client *client,
 	if (ret < 0)
 		goto exit_input_init;
 
-	sensors_register(data->factory_device, data, sensor_attrs,
+	sensors_register(&data->factory_device, data, sensor_attrs,
 		MODULE_NAME);
 
 	/* workqueue init */

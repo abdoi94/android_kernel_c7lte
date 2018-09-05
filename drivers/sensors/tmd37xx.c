@@ -44,6 +44,11 @@
 #include "tmd37xx.h"
 #endif
 
+#ifdef TAG
+#undef TAG
+#define TAG "[PROX]"
+#endif
+
 /* Note about power vs enable/disable:
  *  The chip has two functions, proximity and ambient light sensing.
  *  There is no separate power enablement to the two functions (unlike
@@ -299,6 +304,19 @@ static int opt_i2c_write_command(struct taos_data *taos, u8 val)
 
 	return ret;
 }
+#else
+#ifdef CONFIG_SEC_FACTORY
+static int opt_i2c_read(struct taos_data *taos, u8 reg , u8 *val)
+{
+	int ret;
+
+	i2c_smbus_write_byte(taos->i2c_client, (CMD_REG | reg));
+	ret = i2c_smbus_read_byte(taos->i2c_client);
+	*val = ret;
+
+	return ret;
+}
+#endif //CONFIG_SEC_FACTORY
 
 #endif //CONFIG_SENSORS_TMD3782
 
@@ -473,7 +491,7 @@ static int taos_chip_on(struct taos_data *taos)
 	u8 pgain;
 	u8 pldrive;
 	u8 pre_offset;
-	unsigned int poffset;
+	int poffset;
 	char pre_offset_sign;
 	/*********************/
 	/* END				**/
@@ -552,13 +570,26 @@ static int taos_chip_on(struct taos_data *taos)
 	// 2 . Read Factory trim Sign
 	pre_offset_sign = i2c_smbus_read_byte_data(taos->i2c_client, 0xE7);
 
+
 	// 3 . Calculate poffset
-	poffset = (pre_offset * ( (1<<ppulse_len) * (ppulse + 1) * (1<<pgain) * (pldrive + 1) ) / 3264);
+	if(pre_offset_sign > 0)
+		poffset = (-1)*(pre_offset * (( (1<<ppulse_len) * (ppulse + 1) * (1<<pgain) * (pldrive + 1) ) / 3264));  
+	else
+		poffset = pre_offset * (( (1<<ppulse_len) * (ppulse + 1) * (1<<pgain) * (pldrive + 1) ) / 3264);  
+
+	poffset = POFFSET_TRIM + poffset;
+
+	if(poffset > 0)
+		pre_offset_sign = 0x00;
+	else {
+		poffset = (-1) * poffset;
+		pre_offset_sign = 0x01;
+	}
 
 	SENSOR_INFO("poffset= %d, pre_poffset= %d, ppulse= %d, ppulse_len= %d\n",poffset,pre_offset,ppulse,ppulse_len);
 	SENSOR_INFO("pre_offset_sign= %d, pgain= %d, pldrive= %d, 2<<pgain= %d\n",pre_offset_sign,pgain,pldrive,2<<(pgain-1));
 
-	temp_val =  (u8)poffset + POFFSET_TRIM;
+	temp_val =  (u8)poffset;
 	ret = opt_i2c_write(taos,POFFSET_L, &temp_val);
 
 	temp_val = pre_offset_sign;
@@ -1482,6 +1513,57 @@ static ssize_t prox_trim_store(struct device *dev,
 	return size;
 }
 
+#ifdef CONFIG_SEC_FACTORY
+static ssize_t proximity_register_write_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	unsigned int regist = 0, val = 0;
+	struct taos_data *taos = dev_get_drvdata(dev);
+
+	if (sscanf(buf, "%x,%x", &regist, &val) != 2) {
+		SENSOR_ERR("The number of data are wrong\n");
+		return count;
+	}
+
+	opt_i2c_write(taos, regist, (u8 *)&val);
+	SENSOR_INFO("Register(0x%2x) 16:data(0x%4x) 10:%d \n", regist, val, val);
+
+	return count;
+}
+
+static ssize_t proximity_register_read_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{ 
+	u8 val, i;
+	int offset = 0;
+	struct taos_data *taos = dev_get_drvdata(dev);
+
+	for (i = 0; i < 90; i++) {
+		val = 0;
+		opt_i2c_read(taos, i + 128, &val);
+		offset += snprintf(buf + offset, PAGE_SIZE - offset,
+			"Register(0x%2x), data(0x%2x)\n", i + 128, val);
+
+		SENSOR_INFO("Register(0x%2x) data(0x%2x)\n", i, val);
+	}
+
+	//e6
+	val = 0;
+	opt_i2c_read(taos,0xE6, &val);
+	offset += snprintf(buf + offset, PAGE_SIZE - offset,
+		"Register(0xE6), data(0x%2x)\n", val);
+	
+	//e7
+	val = 0;
+	opt_i2c_read(taos,0xE7, &val);
+	offset += snprintf(buf + offset, PAGE_SIZE - offset,
+		"Register(0xE7), data(0x%2x)\n", val);
+	
+
+	return offset;
+}
+#endif //CONFIG_SEC_FACTORY
+
 #ifdef CONFIG_SENSORS_TMD3700_RESET_DEFENCE_CODE
 static ssize_t taos_power_reset_show(struct device *dev,
 	struct device_attribute *attr, char *buf)
@@ -1676,6 +1758,10 @@ static DEVICE_ATTR(thresh_low, 0644, thresh_low_show,
 	thresh_low_store);
 static DEVICE_ATTR(prox_trim, S_IRUGO| S_IWUSR | S_IWGRP,
 	prox_trim_show, prox_trim_store);
+#ifdef CONFIG_SEC_FACTORY
+static DEVICE_ATTR(prox_register, S_IRUGO | S_IWUSR | S_IWGRP,
+	proximity_register_read_show, proximity_register_write_store);
+#endif //CONFIG_SEC_FACTORY
 static struct device_attribute *prox_sensor_attrs[] = {
 	&dev_attr_state,
 	&dev_attr_prox_avg,
@@ -1688,6 +1774,9 @@ static struct device_attribute *prox_sensor_attrs[] = {
 	&dev_attr_thresh_high,
 	&dev_attr_thresh_low,
 	&dev_attr_prox_trim,
+#ifdef CONFIG_SEC_FACTORY
+	&dev_attr_prox_register,
+#endif //CONFIG_SEC_FACTORY
 	NULL
 };
 
@@ -2176,6 +2265,7 @@ sreboot:
 		goto err_input_allocate_device_proximity;
 	}
 	input_set_drvdata(taos->proximity_input_dev, taos);
+
 	taos->proximity_input_dev->name = "proximity_sensor";
 #if defined(CONFIG_SENSORS_TMD3700) || defined(CONFIG_SENSORS_TMD3782_PROX_ABS)
 	input_set_capability(taos->proximity_input_dev, EV_ABS, ABS_DISTANCE);
@@ -2191,7 +2281,7 @@ sreboot:
 		goto err_input_register_device_proximity;
 	}
 
-	ret = sensors_register(taos->proximity_dev, taos, prox_sensor_attrs,
+	ret = sensors_register(&taos->proximity_dev, taos, prox_sensor_attrs,
 		MODULE_NAME_PROX); /* factory attributs */
 	if (ret < 0) {
 		SENSOR_ERR(" could not registersensors_register\n");
@@ -2247,6 +2337,7 @@ sreboot:
 		goto err_input_allocate_device_light;
 	}
 	input_set_drvdata(taos->light_input_dev, taos);
+
 	taos->light_input_dev->name = "light_sensor";
 	input_set_capability(taos->light_input_dev, EV_REL, REL_MISC);
 	input_set_capability(taos->light_input_dev, EV_REL, REL_WHEEL);
@@ -2257,7 +2348,7 @@ sreboot:
 		SENSOR_ERR("could not register input device\n");
 		goto err_input_register_device_light;
 	}
-	ret = sensors_register(taos->light_dev,taos, lightsensor_additional_attributes,"light_sensor");
+	ret = sensors_register(&taos->light_dev,taos, lightsensor_additional_attributes,"light_sensor");
 	if (ret < 0) {
 		SENSOR_ERR("cound not register light sensor device(%d).\n",ret);
 		goto err_sensor_register_device_light;
@@ -2319,7 +2410,6 @@ err_input_allocate_device_proximity:
 	wake_lock_destroy(&taos->prx_wake_lock);
 err_devicetree:
 	SENSOR_ERR("error in device tree\n");
-	kfree(pdata);
 err_taos_data_free:
 err_chip_id_or_i2c_error:
 	kfree(taos);
@@ -2404,9 +2494,26 @@ static int taos_i2c_remove(struct i2c_client *client)
 	mutex_destroy(&taos->power_lock);
 	mutex_destroy(&taos->prox_mutex);
 	wake_lock_destroy(&taos->prx_wake_lock);
-	kfree(taos->pdata);
 	kfree(taos);
 	return 0;
+}
+
+static void taos_i2c_shutdown(struct i2c_client *client)
+{
+	struct taos_data *taos = i2c_get_clientdata(client);
+
+	SENSOR_INFO("taos_i2c_shutdown\n");
+
+	if (taos->power_state & LIGHT_ENABLED)
+		taos_light_disable(taos);
+
+	if (taos->power_state == LIGHT_ENABLED)
+		taos_chip_off(taos);
+
+	if (taos->power_state & PROXIMITY_ENABLED)
+		disable_irq(taos->irq);
+
+	SENSOR_INFO("taos_i2c_shutdown done\n");
 }
 
 static const struct i2c_device_id taos_device_id[] = {
@@ -2436,9 +2543,9 @@ static struct i2c_driver taos_i2c_driver = {
 	},
 	.probe		= taos_i2c_probe,
 	.remove		= taos_i2c_remove,
+	.shutdown	= taos_i2c_shutdown,
 	.id_table	= taos_device_id,
 };
-
 
 static int __init taos_init(void)
 {

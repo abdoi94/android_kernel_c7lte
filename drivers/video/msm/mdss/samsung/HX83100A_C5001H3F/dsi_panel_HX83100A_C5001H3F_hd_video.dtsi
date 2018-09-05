@@ -24,7 +24,6 @@
 		qcom,mdss-dsi-bpp = <24>;
 		qcom,mdss-dsi-panel-destination = "display_1";
 		qcom,mdss-dsi-panel-timings = [A2 24 18 00 4E 52 1C 28 1F 03 04 00];
-		//qcom,mdss-dsi-panel-timings-8996 = ;
 		qcom,mdss-dsi-on-command = [
 					29 01 00 00 00 00 04 B9 83 10 0A
 					29 01 00 00 00 00 0C B1 08 7F 3F A1 19 22 22 4E EE 21 61
@@ -35,10 +34,11 @@
 					29 01 00 00 00 00 0E B4 00 FF 01 43 01 43 3C 3C 01 58 01 58 20
 					29 01 00 00 00 00 04 B6 BC BC 00
 
+					/* --- Choose one for specific scan dirction --- */
 					/* Forward and left to right */
 					29 01 00 00 00 00 02 CC 02
 					/* Backward and right to left */
-					29 01 00 00 00 00 02 CC 0E
+					/*29 01 00 00 00 00 02 CC 0E*/
 
 					29 01 00 00 00 00 29 D5 18 18 18 18 39 39 18 18 23 22 21 20 05 04 07 06 01 00 03 02 18 18 18 18 38 38 19 19 18 18 18 18 18 18 18 18 18 18 18 18
 					29 01 00 00 00 00 29 D6 18 18 18 18 39 39 19 19 20 21 22 23 02 03 00 01 06 07 04 05 18 18 18 18 38 38 18 18 18 18 18 18 18 18 18 18 18 18 18 18
@@ -78,11 +78,11 @@
 		//qcom,mdss-dsi-fbc-rgb-threshold = ;
 		//qcom,mdss-dsi-fbc-lossy-mode-idx = ;
 		//qcom,mdss-dsi-fbc-max-pred-err = ;
-		qcom,mdss-dsi-h-back-porch = <25>;
-		qcom,mdss-dsi-h-front-porch = <210>;
+		qcom,mdss-dsi-h-back-porch = <118>;
+		qcom,mdss-dsi-h-front-porch = <254>;
 		qcom,mdss-dsi-h-pulse-width = <25>;
 		qcom,mdss-dsi-h-sync-skew = <0>;
-		/* 
+		/*
 			HX83100A DDI need to keep VBP & VSW only.
 			VFP value could be anything.
 		*/
@@ -140,7 +140,7 @@
 		qcom,mdss-dsi-panel-clockrate = <600000000>;
 		//qcom,mdss-mdp-transfer-time-us = ;
 		qcom,mdss-dsi-on-command-state = "dsi_hs_mode";
-		qcom,mdss-dsi-off-command-state = "dsi_lp_mode";
+		qcom,mdss-dsi-off-command-state = "dsi_hs_mode";
 		//qcom,mdss-dsi-post-mode-switch-on-command-state = ;
 		qcom,mdss-pan-physical-width-dimension = <62>;
 		qcom,mdss-pan-physical-height-dimension = <106>;
@@ -201,7 +201,7 @@
 		//qcom,mdss-dsi-timing-default = ;
 		//qcom,mdss-dsi-timing-switch-command = ;
 		//qcom,mdss-dsi-timing-switch-command-state  = ;
-		
+
 /*
  * ************************************************************************************************************************************
  *
@@ -211,8 +211,8 @@
  *
  * ************************************************************************************************************************************
  */
- 		samsung,panel-vendor = "HIMAX";
- 		samsung,tft-common-support;
+		samsung,panel-vendor = "BOE";
+		samsung,tft-common-support;
 
 		samsung,level1_key_enable_tx_cmds_revA = [
 			29 01 00 00 00 00 04 B9 83 10 0A
@@ -231,7 +231,7 @@
 			05 01 00 00 00 00 02 29 00
 		];
 		samsung,display_off_tx_cmds_revA = [05 01 00 00 00 00 02 28 00];
-	
+
 		/*
 		 * First parameters can be changed
 		 * by function of samsung_nv_read()
@@ -364,4 +364,3 @@
 		>;
 	};
 };
-

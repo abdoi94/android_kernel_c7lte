@@ -34,6 +34,46 @@
 #include <asm/cacheflush.h>
 #include <asm/io.h>
 
+enum sec_debug_upload_cause_t {
+	UPLOAD_CAUSE_INIT = 0xCAFEBABE,
+	UPLOAD_CAUSE_KERNEL_PANIC = 0x000000C8,
+	UPLOAD_CAUSE_POWER_LONG_PRESS = 0x00000085,
+	UPLOAD_CAUSE_FORCED_UPLOAD = 0x00000022,
+	UPLOAD_CAUSE_USER_FORCED_UPLOAD = 0x00009890,
+	UPLOAD_CAUSE_CP_ERROR_FATAL = 0x000000CC,
+	UPLOAD_CAUSE_MDM_ERROR_FATAL = 0x000000EE,
+	UPLOAD_CAUSE_USER_FAULT = 0x0000002F,
+	UPLOAD_CAUSE_HSIC_DISCONNECTED = 0x000000DD,
+	UPLOAD_CAUSE_MODEM_RST_ERR = 0x000000FC,
+	UPLOAD_CAUSE_RIVA_RST_ERR = 0x000000FB,
+	UPLOAD_CAUSE_LPASS_RST_ERR = 0x000000FA,
+	UPLOAD_CAUSE_DSPS_RST_ERR = 0x000000FD,
+	UPLOAD_CAUSE_PERIPHERAL_ERR = 0x000000FF,
+	UPLOAD_CAUSE_NON_SECURE_WDOG_BARK = 0x00000DBA,
+	UPLOAD_CAUSE_NON_SECURE_WDOG_BITE = 0x00000DBE,
+	UPLOAD_CAUSE_POWER_THERMAL_RESET = 0x00000075,
+	UPLOAD_CAUSE_SECURE_WDOG_BITE = 0x00005DBE,
+	UPLOAD_CAUSE_BUS_HANG = 0x000000B5,
+#if defined(CONFIG_SEC_NAD)
+	UPLOAD_CAUSE_NAD_CRYPTO = 0x00000ACF,
+	UPLOAD_CAUSE_NAD_ICACHE = 0x00000ACA,
+	UPLOAD_CAUSE_NAD_CACHECOHERENCY = 0x00000ACC,
+	UPLOAD_CAUSE_NAD_SUSPEND = 0x00000A3E,
+	UPLOAD_CAUSE_NAD_VDDMIN = 0x00000ADD,
+	UPLOAD_CAUSE_NAD_QMESADDR = 0x00000A29,
+	UPLOAD_CAUSE_NAD_QMESACACHE = 0x00000AED,
+	UPLOAD_CAUSE_NAD_PMIC = 0x00000AB8,
+	UPLOAD_CAUSE_NAD_UFS = 0x00000AF5,
+	UPLOAD_CAUSE_NAD_SDCARD = 0x00000A7C,
+	UPLOAD_CAUSE_NAD_DDRTEST_FAIL = 0x00000A33,
+	UPLOAD_CAUSE_NAD_FAIL = 0x00000A65,
+	UPLOAD_CAUSE_DDR_TEST =	0x00000A30,
+	UPLOAD_CAUSE_DDR_TEST_FOR_MAIN = 0x00000A35,
+	UPLOAD_CAUSE_DDR_TEST_FOR_SSLT = 0x00000A3A,
+	UPLOAD_CAUSE_DDR_TEST_FOR_SMD = 0x00000A3F,
+#endif
+};
+
 enum sec_restart_reason_t {
 	RESTART_REASON_NORMAL = 0x0,
 	RESTART_REASON_BOOTLOADER = 0x77665500,
@@ -81,6 +121,8 @@ extern int sec_debug_dump_stack(void);
 extern void sec_debug_hw_reset(void);
 #ifdef CONFIG_SEC_PERIPHERAL_SECURE_CHK
 extern void sec_peripheral_secure_check_fail(void);
+#else
+static inline void sec_peripheral_secure_check_fail(void) {}
 #endif
 extern void sec_getlog_supply_fbinfo(void *p_fb, u32 res_x, u32 res_y, u32 bpp,
 		u32 frames);
@@ -107,13 +149,6 @@ extern void sec_debug_set_thermal_upload(void);
 /* from 'msm-poweroff.c' */
 extern void set_dload_mode(int on);
 
-#ifdef CONFIG_SEC_LOG_LAST_KMSG
-extern void sec_set_reset_extra_info(char *last_kmsg_buffer,
-		unsigned last_kmsg_size);
-#else /* CONFIG_SEC_LOG_LAST_KMSG */
-static inline void sec_set_reset_extra_info(char *last_kmsg_buffer,
-		unsigned last_kmsg_size) {}
-#endif /* CONFIG_SEC_LOG_LAST_KMSG */
 #else /* CONFIG_SEC_DEBUG */
 static inline void sec_debug_save_context(void) {}
 static inline void sec_debug_prepare_for_wdog_bark_reset(void) {}
@@ -141,12 +176,19 @@ static inline u32 sec_debug_get_rr(void) { return 0; }
 static inline void sec_debug_print_model(
 		struct seq_file *m, const char *cpu_name) {}
 
-static void sec_debug_update_dload_mode(const int restart_mode,
+static inline void sec_debug_update_dload_mode(const int restart_mode,
 		const int in_panic) {}
 static inline void sec_debug_update_restart_reason(const char *cmd,
 		const int in_panic) {}
 static inline void sec_debug_set_thermal_upload(void) {}
+static inline void sec_peripheral_secure_check_fail(void) {}
 #endif /* CONFIG_SEC_DEBUG */
+
+#ifdef CONFIG_SEC_FILE_LEAK_DEBUG
+extern void sec_debug_EMFILE_error_proc(void);
+#else
+static inline void sec_debug_EMFILE_error_proc(void) {}
+#endif
 
 #ifdef CONFIG_SEC_SSR_DEBUG_LEVEL_CHK
 extern int sec_debug_is_enabled_for_ssr(void);
@@ -460,6 +502,22 @@ extern void emerg_pet_watchdog(void);
 #ifdef CONFIG_SEC_DEBUG_DOUBLE_FREE
 extern void *kfree_hook(void *p, void *caller);
 #endif
+
+typedef enum {
+	USER_UPLOAD_CAUSE_MIN = 1,
+	USER_UPLOAD_CAUSE_SMPL = USER_UPLOAD_CAUSE_MIN,	/* RESET_REASON_SMPL */
+	USER_UPLOAD_CAUSE_WTSR,			/* RESET_REASON_WTSR */
+	USER_UPLOAD_CAUSE_WATCHDOG,		/* RESET_REASON_WATCHDOG */
+	USER_UPLOAD_CAUSE_PANIC,		/* RESET_REASON_PANIC */
+	USER_UPLOAD_CAUSE_MANUAL_RESET,	/* RESET_REASON_MANUAL_RESET */
+	USER_UPLOAD_CAUSE_POWER_RESET,	/* RESET_REASON_POWER_RESET */
+	USER_UPLOAD_CAUSE_REBOOT,		/* RESET_REASON_REBOOT */
+	USER_UPLOAD_CAUSE_BOOTLOADER_REBOOT,/* RESET_REASON_BOOTLOADER_REBOOT */
+	USER_UPLOAD_CAUSE_POWER_ON,		/* RESET_REASON_POWER_ON */
+	USER_UPLOAD_CAUSE_THERMAL,		/* RESET_REASON_THERMAL_RESET */
+	USER_UPLOAD_CAUSE_UNKNOWN,		/* RESET_REASON_UNKNOWN */
+	USER_UPLOAD_CAUSE_MAX = USER_UPLOAD_CAUSE_UNKNOWN,
+} user_upload_cause_t;
 
 #ifdef CONFIG_TOUCHSCREEN_DUMP_MODE
 struct tsp_dump_callbacks {

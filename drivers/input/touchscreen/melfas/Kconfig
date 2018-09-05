@@ -28,5 +28,9 @@ config TOUCHSCREEN_DUMP_MODE
         tristate "TSP dump mode"
         depends on I2C
 
+config TOUCHSCREEN_MELFAS_AOT
+        tristate "TSP AOT"
+	default y
+        depends on TOUCHSCREEN_MELFAS_MMS449
 endif
 

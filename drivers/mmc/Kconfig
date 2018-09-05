@@ -40,6 +40,11 @@ config NO_DETECT_PIN
 	default n
 	help
 
+config MMC_SUPPORT_STLOG
+        bool "Enable storage log"
+        depends on MMC && PROC_STLOG
+        default y
+
 if MMC
 
 source "drivers/mmc/core/Kconfig"

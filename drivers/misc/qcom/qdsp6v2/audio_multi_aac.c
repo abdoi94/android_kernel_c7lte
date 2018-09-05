@@ -2,7 +2,7 @@
  *
  * Copyright (C) 2008 Google, Inc.
  * Copyright (C) 2008 HTC Corporation
- * Copyright (c) 2011-2015, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2011-2017, The Linux Foundation. All rights reserved.
  *
  * This software is licensed under the terms of the GNU General Public
  * License version 2, as published by the Free Software Foundation, and
@@ -58,9 +58,9 @@ static long audio_ioctl_shared(struct file *file, unsigned int cmd,
 						audio->ac->session);
 		if (audio->feedback == NON_TUNNEL_MODE) {
 			/* Configure PCM output block */
-			rc = q6asm_enc_cfg_blk_pcm_native(audio->ac,
-				aac_cfg.sample_rate,
-				aac_cfg.ch_cfg);
+			rc = q6asm_enc_cfg_blk_pcm(audio->ac,
+					audio->pcm_cfg.sample_rate,
+					audio->pcm_cfg.channel_count);
 			if (rc < 0) {
 				pr_err("pcm output block config failed\n");
 				break;
@@ -302,6 +302,8 @@ static long audio_compat_ioctl(struct file *file, unsigned int cmd,
 		struct msm_audio_aac_config *aac_config;
 		struct msm_audio_aac_config32 aac_config_32;
 
+		memset(&aac_config_32, 0, sizeof(aac_config_32));
+
 		aac_config = (struct msm_audio_aac_config *)audio->codec_cfg;
 		aac_config_32.format = aac_config->format;
 		aac_config_32.audio_object = aac_config->audio_object;
@@ -424,6 +426,8 @@ static int audio_open(struct inode *inode, struct file *file)
 	audio->wakelock_voted = false;
 	audio->audio_ws_mgr = &audio_multiaac_ws_mgr;
 	aac_config->dual_mono_mode = AUDIO_AAC_DUAL_MONO_INVALID;
+
+	init_waitqueue_head(&audio->event_wait);
 
 	audio->ac = q6asm_audio_client_alloc((app_cb) q6_audio_cb,
 					     (void *)audio);

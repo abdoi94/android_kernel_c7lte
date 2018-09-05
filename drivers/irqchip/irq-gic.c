@@ -42,7 +42,7 @@
 #include <linux/irqchip/arm-gic.h>
 #include <linux/syscore_ops.h>
 #include <linux/msm_rtb.h>
-
+#include <linux/wakeup_reason.h>
 #include <asm/cputype.h>
 #include <asm/irq.h>
 #include <asm/exception.h>
@@ -283,12 +283,9 @@ static void gic_show_resume_irq(struct gic_chip_data *gic)
 	for (i = find_first_bit((unsigned long *)pending, gic->gic_irqs);
 	i < gic->gic_irqs;
 	i = find_next_bit((unsigned long *)pending, gic->gic_irqs, i+1)) {
-#ifdef CONFIG_SEC_PM
-		unsigned int irq = irq_find_mapping(gic->domain, i);
+		unsigned int irq = irq_find_mapping(gic->domain,
+						i + gic->irq_offset);
 		struct irq_desc *desc = irq_to_desc(irq);
-#else
-		struct irq_desc *desc = irq_to_desc(i + gic->irq_offset);
-#endif
 		const char *name = "null";
 
 		if (desc == NULL)
@@ -297,14 +294,15 @@ static void gic_show_resume_irq(struct gic_chip_data *gic)
 			name = desc->action->name;
 
 #ifdef CONFIG_SEC_PM
-		pr_info("Resume caused by IRQ %d(GIC %d) %s\n", irq, i, name);
+		pr_info("Resume caused by IRQ %d(GIC %d) %s\n", irq, i + gic->irq_offset, name);
 		last_resume_kernel_reason_len +=
 			sprintf(last_resume_kernel_reason + last_resume_kernel_reason_len,
-			"%d,%d,%s|", irq, i, name);
+			"%d,%d,%s|", irq, i + gic->irq_offset, name);
 #else
 		pr_warning("%s: %d triggered %s\n", __func__,
 					i + gic->irq_offset, name);
 #endif
+		log_base_wakeup_reason(i + gic->irq_offset);
 	}
 }
 
@@ -468,6 +466,14 @@ static void __exception_irq_entry gic_handle_irq(struct pt_regs *regs)
 			writel_relaxed_no_log(irqstat, cpu_base + GIC_CPU_EOI);
 			uncached_logk(LOGK_IRQ, (void *)(uintptr_t)irqnr);
 #ifdef CONFIG_SMP
+			/*
+			 * Ensure any shared data written by the CPU sending
+			 * the IPI is read after we've read the ACK register
+			 * on the GIC.
+			 *
+			 * Pairs with the write barrier in gic_raise_softirq
+			 */
+			smp_rmb();
 			handle_IPI(irqnr, regs);
 #endif
 			continue;
@@ -476,12 +482,13 @@ static void __exception_irq_entry gic_handle_irq(struct pt_regs *regs)
 	} while (1);
 }
 
-static void gic_handle_cascade_irq(unsigned int irq, struct irq_desc *desc)
+static bool gic_handle_cascade_irq(unsigned int irq, struct irq_desc *desc)
 {
 	struct gic_chip_data *chip_data = irq_get_handler_data(irq);
 	struct irq_chip *chip = irq_get_chip(irq);
 	unsigned int cascade_irq, gic_irq;
 	unsigned long status;
+	int handled = false;
 
 	chained_irq_enter(chip, desc);
 
@@ -497,10 +504,12 @@ static void gic_handle_cascade_irq(unsigned int irq, struct irq_desc *desc)
 	if (unlikely(gic_irq < 32 || gic_irq > 1020))
 		handle_bad_irq(cascade_irq, desc);
 	else
-		generic_handle_irq(cascade_irq);
+		handled = generic_handle_irq(cascade_irq);
+
 
  out:
 	chained_irq_exit(chip, desc);
+	return handled == true;
 }
 
 static struct irq_chip gic_chip = {

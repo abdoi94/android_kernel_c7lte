@@ -21,6 +21,7 @@
 #include <linux/spinlock.h>
 #include <linux/wakelock.h>
 #include <linux/hall.h>
+#include <linux/pinctrl/consumer.h>
 
 //extern struct device *sec_key;
 
@@ -67,7 +68,7 @@ static void flip_cover_work(struct work_struct *work)
 
 	if (first == second) {
 		flip_cover = first;
-#if defined(CONFIG_SEC_ELITELTE_PROJECT)	/* for Folder : Using model feature is temporary modification. We have to use dt or folder feature */
+#if defined(CONFIG_SENSORS_HALL_FOLDER)
 		input_report_switch(ddata->input, SW_LID, !flip_cover);	/* foder open : 0, close : 1 */
 #else
 		input_report_switch(ddata->input, SW_FLIP, flip_cover);
@@ -88,7 +89,7 @@ static void flip_cover_work(struct work_struct *work)
 	pr_info("hall:%s #1 : %d\n", __func__, first);
 
 	flip_cover = first;
-#if defined(CONFIG_SEC_ELITELTE_PROJECT)	/* for Folder : Using model feature is temporary modification. We have to use dt or folder feature */
+#if defined(CONFIG_SENSORS_HALL_FOLDER)
 	input_report_switch(ddata->input, SW_LID, !flip_cover);	/* foder open : 0, close : 1 */
 #else
 	input_report_switch(ddata->input, SW_FLIP, flip_cover);
@@ -192,11 +193,21 @@ static int hall_probe(struct platform_device *pdev)
 	struct hall_drvdata *ddata;
 	struct input_dev *input;
 	int error;
+	struct pinctrl *hall_pinctrl;
 
 	ddata = kzalloc(sizeof(struct hall_drvdata), GFP_KERNEL);
 	if (!ddata) {
 		dev_err(dev, "failed to allocate state\n");
 		return -ENOMEM;
+	}
+
+	hall_pinctrl = devm_pinctrl_get_select(dev, "hall_pinctrl");
+	if (IS_ERR(hall_pinctrl)) {
+		if (PTR_ERR(hall_pinctrl) == -EPROBE_DEFER)
+			pr_err("[hall]: Error %d\n", -EPROBE_DEFER);
+
+		pr_debug("[hall]: Target does not use pinctrl\n");
+		hall_pinctrl = NULL;
 	}
 
 #ifdef CONFIG_OF
@@ -229,7 +240,7 @@ static int hall_probe(struct platform_device *pdev)
 	input->dev.parent = &pdev->dev;
 
 	input->evbit[0] |= BIT_MASK(EV_SW);
-#if defined(CONFIG_SEC_ELITELTE_PROJECT)	/* for Folder : Using model feature is temporary modification. We have to use dt or folder feature */
+#if defined(CONFIG_SENSORS_HALL_FOLDER)
 	input_set_capability(input, EV_SW, SW_LID);
 #else
 	input_set_capability(input, EV_SW, SW_FLIP);
@@ -257,6 +268,12 @@ static int hall_probe(struct platform_device *pdev)
 			error);
 		goto fail1;
 	}
+
+#if defined(CONFIG_SENSORS_HALL_FOLDER)		// for AT+COUNTRST(/efs/SlideCout) issue
+	if (flip_cover == 0) {
+		schedule_delayed_work(&ddata->flip_cover_dwork, HZ / 2);
+	}
+#endif
 
 	device_init_wakeup(&pdev->dev, false);
 

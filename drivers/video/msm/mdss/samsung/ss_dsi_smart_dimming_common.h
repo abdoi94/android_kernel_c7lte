@@ -23,10 +23,6 @@ Copyright (C) 2012, Samsung Electronics. All rights reserved.
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
- * 02110-1301, USA.
  *
 */
 #ifndef _SAMSUNG_DSI_SMART_DIMMING_H_
@@ -44,6 +40,7 @@ struct smartdim_conf {
 	int *lux_tab;
 	int lux_tabsize;
 	unsigned int man_id;
+	char panel_revision;
 
 	/* HBM interpolation */
 	char *hbm_payload;
@@ -240,17 +237,17 @@ extern int curve_2p15_360[GAMMA_INDEX_MAX];
 
 /*
 *		index : 0 ~ 255
-*		360 is max CANDELA
-*		(360*((index/255)^2.2))*4194304
-*/
-extern int curve_2p2_360[GAMMA_INDEX_MAX];
-
-/*
-*		index : 0 ~ 255
 *		420 is max CANDELA
 *		(420*((index/255)^2.15))*4194304
 */
 extern int curve_2p15_420[GAMMA_INDEX_MAX];
+
+/*
+*		index : 0 ~ 255
+*		360 is max CANDELA
+*		(360*((index/255)^2.2))*4194304
+*/
+extern int curve_2p2_360[GAMMA_INDEX_MAX];
 
 /*
 *		index : 0 ~ 255

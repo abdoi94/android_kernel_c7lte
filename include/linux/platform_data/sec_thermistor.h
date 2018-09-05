@@ -43,6 +43,7 @@ struct sec_therm_adc_table {
  */
 struct sec_therm_platform_data {
 	unsigned int adc_channel;
+	unsigned int use_mux_sel;
 	unsigned int adc_arr_size;
 	struct sec_therm_adc_table *adc_table;
 };

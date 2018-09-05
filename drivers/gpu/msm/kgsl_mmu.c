@@ -1,4 +1,4 @@
-/* Copyright (c) 2002,2007-2016, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2002,2007-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -23,6 +23,10 @@
 #include "kgsl_mmu.h"
 #include "kgsl_device.h"
 #include "kgsl_sharedmem.h"
+
+#if defined(CONFIG_DISPLAY_SAMSUNG)
+#include <linux/delay.h>
+#endif
 
 static void pagetable_remove_sysfs_objects(struct kgsl_pagetable *pagetable);
 
@@ -389,6 +393,10 @@ kgsl_mmu_map(struct kgsl_pagetable *pagetable,
 	int ret = 0;
 	int size;
 
+#if defined(CONFIG_DISPLAY_SAMSUNG)
+	int retry_cnt;
+#endif
+
 	if (!memdesc->gpuaddr)
 		return -EINVAL;
 	/* Only global mappings should be mapped multiple times */
@@ -400,6 +408,21 @@ kgsl_mmu_map(struct kgsl_pagetable *pagetable,
 
 	if (PT_OP_VALID(pagetable, mmu_map))
 		ret = pagetable->pt_ops->mmu_map(pagetable, memdesc);
+
+#if defined(CONFIG_DISPLAY_SAMSUNG)
+		if (ret != 0 && !in_interrupt()) {
+			for (retry_cnt = 0; retry_cnt < 62 ; retry_cnt++) {
+				/* To wait free page by memory reclaim*/
+				usleep_range(16000, 16000);
+
+				pr_err("kgsl_mmu_map failed : retry (%d) ret : %d\n", retry_cnt, ret);
+
+				ret = pagetable->pt_ops->mmu_map(pagetable, memdesc);
+				if (ret == 0)
+					break;
+			}
+		}
+#endif
 
 	if (ret)
 		return ret;
@@ -419,17 +442,29 @@ EXPORT_SYMBOL(kgsl_mmu_map);
  * @pagetable: Pagetable to release the memory from
  * @memdesc: Memory descriptor containing the GPU address to free
  */
-void kgsl_mmu_put_gpuaddr(struct kgsl_pagetable *pagetable,
-		struct kgsl_memdesc *memdesc)
+void kgsl_mmu_put_gpuaddr(struct kgsl_memdesc *memdesc)
 {
+	struct kgsl_pagetable *pagetable = memdesc->pagetable;
+	int unmap_fail = 0;
+
 	if (memdesc->size == 0 || memdesc->gpuaddr == 0)
 		return;
 
-	if (PT_OP_VALID(pagetable, put_gpuaddr))
-		pagetable->pt_ops->put_gpuaddr(pagetable, memdesc);
+	if (!kgsl_memdesc_is_global(memdesc))
+		unmap_fail = kgsl_mmu_unmap(pagetable, memdesc);
+
+	/*
+	 * Do not free the gpuaddr/size if unmap fails. Because if we
+	 * try to map this range in future, the iommu driver will throw
+	 * a BUG_ON() because it feels we are overwriting a mapping.
+	*/
+	if (PT_OP_VALID(pagetable, put_gpuaddr) && (unmap_fail == 0))
+		pagetable->pt_ops->put_gpuaddr(memdesc);
 
 	if (!kgsl_memdesc_is_global(memdesc))
 		memdesc->gpuaddr = 0;
+
+	memdesc->pagetable = NULL;
 }
 EXPORT_SYMBOL(kgsl_mmu_put_gpuaddr);
 
@@ -512,12 +547,12 @@ void kgsl_mmu_remove_global(struct kgsl_device *device,
 EXPORT_SYMBOL(kgsl_mmu_remove_global);
 
 void kgsl_mmu_add_global(struct kgsl_device *device,
-		struct kgsl_memdesc *memdesc)
+		struct kgsl_memdesc *memdesc, const char *name)
 {
 	struct kgsl_mmu *mmu = &device->mmu;
 
 	if (MMU_OP_VALID(mmu, mmu_add_global))
-		mmu->mmu_ops->mmu_add_global(mmu, memdesc);
+		mmu->mmu_ops->mmu_add_global(mmu, memdesc, name);
 }
 EXPORT_SYMBOL(kgsl_mmu_add_global);
 
@@ -546,6 +581,17 @@ bool kgsl_mmu_gpuaddr_in_range(struct kgsl_pagetable *pagetable,
 }
 EXPORT_SYMBOL(kgsl_mmu_gpuaddr_in_range);
 
+struct kgsl_memdesc *kgsl_mmu_get_qdss_global_entry(struct kgsl_device *device)
+{
+	struct kgsl_mmu *mmu = &device->mmu;
+
+	if (MMU_OP_VALID(mmu, mmu_get_qdss_global_entry))
+		return mmu->mmu_ops->mmu_get_qdss_global_entry();
+
+	return NULL;
+}
+EXPORT_SYMBOL(kgsl_mmu_get_qdss_global_entry);
+
 /*
  * NOMMU defintions - NOMMU really just means that the MMU is kept in pass
  * through and the GPU directly accesses physical memory. Used in debug mode and
@@ -569,7 +615,12 @@ static int nommu_get_gpuaddr(struct kgsl_pagetable *pagetable,
 
 	memdesc->gpuaddr = (uint64_t) sg_phys(memdesc->sgt->sgl);
 
-	return memdesc->gpuaddr != 0 ? 0 : -ENOMEM;
+	if (memdesc->gpuaddr) {
+		memdesc->pagetable = pagetable;
+		return 0;
+	}
+
+	return -ENOMEM;
 }
 
 static struct kgsl_mmu_pt_ops nommu_pt_ops = {
@@ -578,7 +629,7 @@ static struct kgsl_mmu_pt_ops nommu_pt_ops = {
 };
 
 static void nommu_add_global(struct kgsl_mmu *mmu,
-		struct kgsl_memdesc *memdesc)
+		struct kgsl_memdesc *memdesc, const char *name)
 {
 	memdesc->gpuaddr = (uint64_t) sg_phys(memdesc->sgt->sgl);
 }

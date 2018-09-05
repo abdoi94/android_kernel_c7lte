@@ -46,10 +46,16 @@
 
 #include <linux/sec_debug.h>
 #include <linux/sec_debug_summary.h>
+#include <linux/sec_param.h>
+
+#ifdef CONFIG_USER_RESET_DEBUG
+#include <linux/user_reset/sec_debug_user_reset.h>
+#endif
 
 #include <asm/cacheflush.h>
 #include <asm/cputype.h>
 #include <asm/system_misc.h>
+#include <asm/stacktrace.h>
 
 #include <linux/qpnp/power-on.h>
 #include <soc/qcom/scm.h>
@@ -57,7 +63,7 @@
 #define CREATE_TRACE_POINTS
 #include <trace/events/sec_debug.h>
 
-#define CONFIG_SEC_DEBUG_CANCERIZER
+//#define CONFIG_SEC_DEBUG_CANCERIZER
 
 #ifdef CONFIG_SEC_DEBUG_CANCERIZER
 #include <linux/random.h>
@@ -66,26 +72,7 @@
 
 #include "sec_key_notifier.h"
 
-enum sec_debug_upload_cause_t {
-	UPLOAD_CAUSE_INIT = 0xCAFEBABE,
-	UPLOAD_CAUSE_KERNEL_PANIC = 0x000000C8,
-	UPLOAD_CAUSE_POWER_LONG_PRESS = 0x00000085,
-	UPLOAD_CAUSE_FORCED_UPLOAD = 0x00000022,
-	UPLOAD_CAUSE_CP_ERROR_FATAL = 0x000000CC,
-	UPLOAD_CAUSE_MDM_ERROR_FATAL = 0x000000EE,
-	UPLOAD_CAUSE_USER_FAULT = 0x0000002F,
-	UPLOAD_CAUSE_HSIC_DISCONNECTED = 0x000000DD,
-	UPLOAD_CAUSE_MODEM_RST_ERR = 0x000000FC,
-	UPLOAD_CAUSE_RIVA_RST_ERR = 0x000000FB,
-	UPLOAD_CAUSE_LPASS_RST_ERR = 0x000000FA,
-	UPLOAD_CAUSE_DSPS_RST_ERR = 0x000000FD,
-	UPLOAD_CAUSE_PERIPHERAL_ERR = 0x000000FF,
-	UPLOAD_CAUSE_NON_SECURE_WDOG_BARK = 0x00000DBA,
-	UPLOAD_CAUSE_NON_SECURE_WDOG_BITE = 0x00000DBE,
-	UPLOAD_CAUSE_POWER_THERMAL_RESET = 0x00000075,
-	UPLOAD_CAUSE_SECURE_WDOG_BITE = 0x00005DBE,
-	UPLOAD_CAUSE_BUS_HANG = 0x000000B5,
-};
+#define MAX_SIZE_KEY	0x0f
 
 #ifdef CONFIG_SEC_DEBUG_CANCERIZER
 #define SZ_TEST		(0x4000 * PAGE_SIZE)
@@ -170,7 +157,7 @@ module_param_named(pm8841_rev, pm8841_rev, uint,
 static int force_error(const char *val, struct kernel_param *kp);
 module_param_call(force_error, force_error, NULL, NULL,
 		S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
-#endif //CONFIG_SEC_DEBUG_FORCE_ERROR
+#endif /* CONFIG_SEC_DEBUG_FORCE_ERROR */
 
 static int sec_alloc_virtual_mem(const char *val, struct kernel_param *kp);
 module_param_call(alloc_virtual_mem, sec_alloc_virtual_mem, NULL, NULL,
@@ -481,7 +468,7 @@ static int force_error(const char *val, struct kernel_param *kp)
 
 	return 0;
 }
-#endif //CONFIG_SEC_DEBUG_FORCE_ERROR
+#endif /* CONFIG_SEC_DEBUG_FORCE_ERROR */
 
 #ifdef CONFIG_SEC_DEBUG_CANCERIZER
 /* core algorithm written in asm codes
@@ -532,7 +519,7 @@ static noinline void cancerizer_core(char *buf, unsigned int *curr_lfsr)
 	"	lsr	w4, w2, #3\n"
 	"	strb	w3, [%0, x4]\n"
 	:
-	: "r" (buf), "r" (curr_lfsr),"M" (POLY_DEGREE29)
+	: "r" (buf), "r" (curr_lfsr), "M" (POLY_DEGREE29)
 	: "cc", "memory");
 #else
 	unsigned int poly = POLY_DEGREE29;
@@ -599,9 +586,8 @@ static int cancerizer_thread(void *arg)
 		while ((lfsr = (get_random_int() & POWEROF29)) == 0)
 			;
 
-		while (loop_cnt++ < POWEROF29) {
+		while (loop_cnt++ < POWEROF29)
 			cancerizer_core(ptr_memtest, &lfsr);
-		}
 
 		vfree(ptr_memtest);
 
@@ -618,9 +604,8 @@ static int cancerizer_thread(void *arg)
 	/* The duty of this thread is only limited to a single turn test.
 	 * Wait for being killed by monitor.
 	 */
-	while (!kthread_should_stop()) {
+	while (!kthread_should_stop())
 		msleep_interruptible(10);
-	}
 
 	return ret;
 }
@@ -631,7 +616,7 @@ static int cancerizer_monitor(void *arg)
 
 	while (!kthread_should_stop()) {
 		/* Monitor should sleep unless nr_test is nonzero.
-		 */		
+		 */
 		wait_event_interruptible(cmctx.mwq, atomic_read(&cmctx.nr_test));
 
 		/* nr_test can be overrided by an user request.
@@ -658,17 +643,15 @@ static int cancerizer_monitor(void *arg)
 
 			/* Start to run core algorithm.
 			 */
-			for (cnt = 0; cnt < NR_CANCERIZERD; cnt++) {
+			for (cnt = 0; cnt < NR_CANCERIZERD; cnt++)
 				wake_up_process(cmctx.td[cnt]);
-			}
 
 			wait_for_completion_interruptible(&cmctx.done);
 
 			/* Kill the D threads.
 			 */
-			for (cnt = 0; cnt < NR_CANCERIZERD; cnt++) {
+			for (cnt = 0; cnt < NR_CANCERIZERD; cnt++)
 				kthread_stop(cmctx.td[cnt]);
-			}
 		} while (atomic_dec_return(&cmctx.nr_test));
 	}
 
@@ -884,9 +867,24 @@ static void sec_debug_set_upload_magic(unsigned magic)
 static int sec_debug_normal_reboot_handler(struct notifier_block *nb,
 		unsigned long action, void *data)
 {
+	char recovery_cause[256];
+
 	set_dload_mode(0);	/* set defalut (not upload mode) */
 
 	sec_debug_set_upload_magic(RESTART_REASON_NORMAL);
+
+	if (unlikely(!data))
+		return 0;
+
+	if ((action == SYS_RESTART) &&
+		!strncmp((char *)data, "recovery", 8)) {
+		sec_get_param(param_index_reboot_recovery_cause, recovery_cause);
+		if (!recovery_cause[0] || !strlen(recovery_cause)) {
+			snprintf(recovery_cause, sizeof(recovery_cause),
+				 "%s:%d ", current->comm, task_pid_nr(current));
+			sec_set_param(param_index_reboot_recovery_cause, recovery_cause);
+		}
+	}
 
 	return 0;
 }
@@ -920,6 +918,12 @@ void sec_debug_update_restart_reason(const char *cmd, const int in_panic)
 		{ "sec_debug_hw_reset",
 			PON_RESTART_REASON_NOT_HANDLE,
 			RESTART_REASON_SEC_DEBUG_MODE, },
+		{ "userrequested",
+			PON_RESTART_REASON_NORMALBOOT,
+			RESTART_REASON_NOT_HANDLE, },
+		{ "GlobalActions restart",
+			PON_RESTART_REASON_NORMALBOOT,
+			RESTART_REASON_NOT_HANDLE, },
 		{ "download",
 			PON_RESTART_REASON_DOWNLOAD,
 			RESTART_REASON_NOT_HANDLE, },
@@ -941,11 +945,15 @@ void sec_debug_update_restart_reason(const char *cmd, const int in_panic)
 		{ "cpmem_off",
 			PON_RESTART_REASON_CP_MEM_RESERVE_OFF,
 			RESTART_REASON_NOT_HANDLE, },
-		{ "GlobalActions restart",
-			PON_RESTART_REASON_NORMALBOOT,
+		{ "mbsmem_on",
+			PON_RESTART_REASON_MBS_MEM_RESERVE_ON,
+			RESTART_REASON_NOT_HANDLE, },
+		{ "mbsmem_off",
+			PON_RESTART_REASON_MBS_MEM_RESERVE_OFF,
 			RESTART_REASON_NOT_HANDLE, },
 	};
 	unsigned long opt_code;
+	unsigned long value;
 	enum pon_restart_reason pon_rr = (!in_panic) ?
 				PON_RESTART_REASON_NORMALBOOT :
 				PON_RESTART_REASON_KERNEL_PANIC;
@@ -959,9 +967,8 @@ void sec_debug_update_restart_reason(const char *cmd, const int in_panic)
 	if (!strncmp(cmd, "oem-", strlen("oem-"))) {
 		pon_rr = PON_RESTART_REASON_UNKNOWN;
 		goto __done;
-	} else if (!strncmp(cmd, "sud", strlen("sud"))) {
-		pon_rr = PON_RESTART_REASON_RORY_START +
-			cmd[strlen("sud")] - '0';
+	} else if (!strncmp(cmd, "sud", 3) && !kstrtoul(cmd + 3, 0, &value)) {
+		pon_rr = (PON_RESTART_REASON_RORY_START | value) ;
 		goto __done;
 	} else if (!strncmp(cmd, "debug", strlen("debug")) &&
 		   !kstrtoul(cmd + strlen("debug"), 0, &opt_code)) {
@@ -993,6 +1000,14 @@ void sec_debug_update_restart_reason(const char *cmd, const int in_panic)
 		}
 		goto __done;
 	}
+#ifdef CONFIG_MUIC_SUPPORT_RUSTPROOF
+	else if (!strncmp(cmd, "swsel", 5) /* set switch value */
+			&& !kstrtoul(cmd + 5, 0, &opt_code)) {
+		opt_code = (((opt_code & 0x8) >> 1) | opt_code) & 0x7;
+		pon_rr = (PON_RESTART_REASON_SWITCHSEL | opt_code);
+		goto __done;
+	}
+#endif
 
 	for (i = 0; i < ARRAY_SIZE(magic); i++) {
 		size_t len = strlen(magic[i].cmd);
@@ -1035,7 +1050,7 @@ static void sec_debug_set_upload_cause(enum sec_debug_upload_cause_t type)
 }
 
 extern struct uts_namespace init_uts_ns;
-void sec_debug_hw_reset(void)
+static inline void sec_debug_pm_restart(const char *cmd)
 {
 	pr_emerg("(%s) %s %s\n", __func__, init_uts_ns.name.release,
 					init_uts_ns.name.version);
@@ -1044,29 +1059,30 @@ void sec_debug_hw_reset(void)
 #ifndef CONFIG_ARM64
 	outer_flush_all();
 #endif
-	arm_pm_restart(0, "sec_debug_hw_reset");
+	arm_pm_restart(REBOOT_COLD, cmd);
 
 	/* while (1) ; */
 	asm volatile ("b .");
 }
+
+void sec_debug_hw_reset(void)
+{
+	sec_debug_pm_restart("sec_debug_hw_reset");
+}
+EXPORT_SYMBOL(sec_debug_hw_reset);
 
 #ifdef CONFIG_SEC_PERIPHERAL_SECURE_CHK
 void sec_peripheral_secure_check_fail(void)
 {
-	/* sec_debug_set_upload_magic(0x77665507); */
-	sec_debug_set_qc_dload_magic(0);
-	pr_emerg("(%s) %s %s\n", __func__, init_uts_ns.name.release,
-					init_uts_ns.name.version);
-	pr_emerg("(%s) rebooting...\n", __func__);
-	flush_cache_all();
-#ifndef CONFIG_ARM64
-	outer_flush_all();
-#endif
-	arm_pm_restart(0, "peripheral_hw_reset");
+	if (!sec_debug_is_enabled()) {
+		sec_debug_set_qc_dload_magic(0);
+		sec_debug_pm_restart("peripheral_hw_reset");
+		/* never reach here */
+	}
 
-	/* while (1) ; */
-	asm volatile ("b .");
+	panic("subsys - modem secure check fail");
 }
+EXPORT_SYMBOL(sec_peripheral_secure_check_fail);
 #endif
 
 void sec_debug_set_thermal_upload(void)
@@ -1077,13 +1093,6 @@ void sec_debug_set_thermal_upload(void)
 }
 EXPORT_SYMBOL(sec_debug_set_thermal_upload);
 
-#ifdef CONFIG_SEC_DEBUG_LOW_LOG
-unsigned sec_debug_get_reset_reason(void)
-{
-	return reset_reason;
-}
-#endif
-
 void sec_debug_print_model(struct seq_file *m, const char *cpu_name)
 {
 	u32 cpuid = read_cpuid_id();
@@ -1092,6 +1101,17 @@ void sec_debug_print_model(struct seq_file *m, const char *cpu_name)
 		   cpu_name, cpuid & 15, ELF_PLATFORM);
 }
 
+#ifdef CONFIG_USER_RESET_DEBUG
+static inline void sec_debug_store_backtrace(void)
+{
+	unsigned long flags;
+
+	local_irq_save(flags);
+	sec_debug_backtrace();
+	local_irq_restore(flags);
+}
+#endif /* CONFIG_USER_RESET_DEBUG */
+
 static int sec_debug_panic_handler(struct notifier_block *nb,
 		unsigned long l, void *buf)
 {
@@ -1099,6 +1119,9 @@ static int sec_debug_panic_handler(struct notifier_block *nb,
 	int timeout = 100; /* means timeout * 100ms */
 
 	emerg_pet_watchdog();	/* CTC-should be modify */
+#ifdef CONFIG_USER_RESET_DEBUG
+	sec_debug_store_backtrace();
+#endif
 	sec_debug_set_upload_magic(RESTART_REASON_SEC_DEBUG_MODE);
 
 	len = strnlen(buf, 80);
@@ -1106,6 +1129,8 @@ static int sec_debug_panic_handler(struct notifier_block *nb,
 		sec_debug_set_upload_cause(UPLOAD_CAUSE_USER_FAULT);
 	else if (!strncmp(buf, "Crash Key", len))
 		sec_debug_set_upload_cause(UPLOAD_CAUSE_FORCED_UPLOAD);
+	else if (!strncmp(buf, "User Crash Key", len))
+		sec_debug_set_upload_cause(UPLOAD_CAUSE_USER_FORCED_UPLOAD);
 	else if (!strncmp(buf, "CP Crash", len))
 		sec_debug_set_upload_cause(UPLOAD_CAUSE_CP_ERROR_FATAL);
 	else if (!strncmp(buf, "MDM Crash", len))
@@ -1124,6 +1149,18 @@ static int sec_debug_panic_handler(struct notifier_block *nb,
 		sec_debug_set_upload_cause(UPLOAD_CAUSE_DSPS_RST_ERR);
 	else if (!strnicmp(buf, "subsys", len))
 		sec_debug_set_upload_cause(UPLOAD_CAUSE_PERIPHERAL_ERR);
+#if defined(CONFIG_SEC_NAD)
+	else if (!strnicmp(buf, "nad_srtest", len))
+		sec_debug_set_upload_cause(UPLOAD_CAUSE_NAD_SUSPEND);
+	else if (!strnicmp(buf, "nad_qmesaddr", len))
+		sec_debug_set_upload_cause(UPLOAD_CAUSE_NAD_QMESADDR);
+	else if (!strnicmp(buf, "nad_qmesacache", len))
+		sec_debug_set_upload_cause(UPLOAD_CAUSE_NAD_QMESACACHE);
+	else if (!strnicmp(buf, "nad_pmic", len))
+		sec_debug_set_upload_cause(UPLOAD_CAUSE_NAD_PMIC);
+	else if (!strnicmp(buf, "nad_fail", len))
+		sec_debug_set_upload_cause(UPLOAD_CAUSE_NAD_FAIL);
+#endif	
 	else
 		sec_debug_set_upload_cause(UPLOAD_CAUSE_KERNEL_PANIC);
 
@@ -1144,8 +1181,6 @@ static int sec_debug_panic_handler(struct notifier_block *nb,
 	 * corrupt stacks below the saved sp
 	 */
 	sec_debug_save_context();
-
-
 	sec_debug_hw_reset();
 
 	return 0;
@@ -1175,7 +1210,7 @@ struct sec_crash_key_callback {
 };
 
 static unsigned int __crash_key[] = {
-	KEY_VOLUMEDOWN, KEY_VOLUMEUP, KEY_POWER, KEY_HOMEPAGE, KEY_ENDCALL
+	KEY_VOLUMEDOWN, KEY_VOLUMEUP, KEY_POWER, KEY_HOMEPAGE, KEY_ENDCALL, KEY_WINK
 };
 
 static unsigned int default_crash_key_code[] = {
@@ -1211,7 +1246,7 @@ static inline void __cb_keycrash(void)
 struct tsp_dump_callbacks dump_callbacks;
 static inline void __cb_tsp_dump(void)
 {
-	pr_info("[TSP] dump_tsp_log : %d\n", __LINE__);
+	pr_info("%s %s\n", SECLOG, __func__);
 	if (dump_callbacks.inform_dump)
 		dump_callbacks.inform_dump();
 }
@@ -1265,10 +1300,15 @@ static LIST_HEAD(key_crash_list);
 
 static struct sec_crash_key *sec_debug_get_first_key_entry(void)
 {
+	if (list_empty(&key_crash_list)) {
+		pr_err("(%s) key crash list is empty.\n", __func__);
+		return NULL;
+	}
+
 	return list_first_entry(&key_crash_list, struct sec_crash_key, node);
 }
 
-static void sec_debug_check_crash_key(unsigned int value, int down)
+static void sec_debug_check_crash_key(unsigned int value, int pressed)
 {
 	static unsigned long unlock_jiffies;
 	static unsigned long trigger_jiffies;
@@ -1277,9 +1317,20 @@ static void sec_debug_check_crash_key(unsigned int value, int down)
 	static unsigned int knock;
 	static size_t k_idx;
 	unsigned int timeout;
+	static bool vd_key_pressed, pwr_key_pressed;
 
-	if (!down) {
-		sec_debug_set_upload_cause(UPLOAD_CAUSE_INIT);
+	if (!pressed) { // key released
+		if (value == KEY_POWER) {
+			printk(KERN_ERR "%s %s:[%s]\n", __func__, "POWER_KEY", pressed ? "P":"R");
+			pwr_key_pressed = false;
+		} else if (value == KEY_VOLUMEDOWN) {
+			printk(KERN_ERR "%s %s:[%s]\n", __func__, "VOL_DOWN", pressed ? "P":"R");
+			vd_key_pressed = false;
+		}
+
+		if (!(vd_key_pressed && pwr_key_pressed)) {
+			sec_debug_set_upload_cause(UPLOAD_CAUSE_INIT);
+		}
 
 		if (unlock != __sec_crash_key->unlock ||
 		    value != __sec_crash_key->trigger)
@@ -1288,10 +1339,23 @@ static void sec_debug_check_crash_key(unsigned int value, int down)
 			return;
 	}
 
-	if (KEY_POWER == value)
-		sec_debug_set_upload_cause(UPLOAD_CAUSE_POWER_LONG_PRESS);
+	if (value == KEY_POWER) {
+		printk(KERN_ERR "%s %s:[%s]\n", __func__, "POWER_KEY", pressed ? "P":"R");
+		pwr_key_pressed = true;
+	} else if (value == KEY_VOLUMEDOWN) {
+		printk(KERN_ERR "%s %s:[%s]\n", __func__, "VOL_DOWN", pressed ? "P":"R");
+		vd_key_pressed = true;
+	}
+
+	if ((value == KEY_VOLUMEDOWN) || (value == KEY_POWER))
+		if (vd_key_pressed && pwr_key_pressed)
+			sec_debug_set_upload_cause(UPLOAD_CAUSE_POWER_LONG_PRESS);
+
+	if (unlikely(!sec_debug_is_enabled()))
+		return;
 
 	__key_store[k_idx++] = value;
+
 	if (sec_debug_unlock_crash_key(value, &unlock)) {
 		if (unlock == __sec_crash_key->unlock && !unlock_jiffies)
 			unlock_jiffies = jiffies;
@@ -1306,7 +1370,7 @@ static void sec_debug_check_crash_key(unsigned int value, int down)
 			goto __clear_all;
 
 		list_for_each_entry(__sec_crash_key, head, node) {
-			if (__sec_crash_key->size < k_idx)
+			if (&__sec_crash_key->node == &key_crash_list || __sec_crash_key->size < k_idx)
 				continue;
 
 			for (i = 0; i < k_idx; i++) {
@@ -1345,7 +1409,8 @@ __next:
 		}
 	}
 
-	return;
+	if (k_idx < max_key_size)
+		return;
 
 __clear_all:
 	other_key_pressed = false;
@@ -1400,7 +1465,7 @@ static int __check_crash_key(struct sec_crash_key *sck)
 
 static inline void __init __sec_debug_init_crash_key(void)
 {
-	size_t i;
+	int i;
 	struct sec_crash_key *crash_key = NULL;
 
 #ifdef CONFIG_OF
@@ -1415,79 +1480,81 @@ static inline void __init __sec_debug_init_crash_key(void)
 	}
 
 	while ((nc = of_get_next_child(np, nc))) {
+		if (of_property_read_u32(nc, "size-keys", &size_keys))
+			continue;
+
+		if (unlikely(size_keys > MAX_SIZE_KEY)) {
+			pr_err("Size of '%s' should be less than %d\n",
+					nc->name, MAX_SIZE_KEY + 1);
+			continue;
+		}
+
+		if (max_key_size < size_keys)
+			max_key_size = size_keys;
+
 		crash_key = kmalloc(sizeof(struct sec_crash_key), GFP_KERNEL);
 		if (unlikely(!crash_key)) {
 			pr_err("unable to allocate memory for crash key.\n");
 			return;
 		}
 
-		if (!of_property_read_u32(nc, "size-keys", &size_keys)) {
-			if (max_key_size < size_keys)
-				max_key_size = size_keys;
-
-			crash_key->keycode = kmalloc(sizeof(unsigned int) *
-							size_keys, GFP_KERNEL);
-			crash_key->size = size_keys;
-			for (i = 0; i < size_keys; i++) {
-				of_property_read_u32_index(nc, "keys", i, &key);
-				for (j = 0; j < ARRAY_SIZE(__crash_key); j++)
-					if (key == __crash_key[j]) {
-						crash_key->keycode[i] = key;
-						break;
-					}
-
-				if (j == ARRAY_SIZE(__crash_key))
-					goto __unknown_key;
-			}
-
-			if (!of_property_read_u32(nc, "timeout", &timeout))
-				crash_key->timeout = timeout;
-			else
-				crash_key->timeout = dflt_crash_key.timeout;
-
-			crash_key->trigger =
-					crash_key->keycode[crash_key->size - 1];
-			crash_key->knock = 1;
-
-			for (i = crash_key->size - 2; i >= 0; i--) {
-				if (crash_key->keycode[i] != crash_key->trigger)
+		crash_key->keycode = kmalloc(sizeof(unsigned int) *
+						size_keys, GFP_KERNEL);
+		crash_key->size = size_keys;
+		for (i = 0; i < size_keys; i++) {
+			of_property_read_u32_index(nc, "keys", i, &key);
+			for (j = 0; j < ARRAY_SIZE(__crash_key); j++)
+				if (key == __crash_key[j]) {
+					crash_key->keycode[i] = key;
 					break;
-				crash_key->knock++;
-			}
+				}
 
-			crash_key->unlock = 0;
-			for (i = 0; i < crash_key->size - crash_key->knock; i++)
-				crash_key->unlock |= 1 << i;
-
-			strlcpy(crash_key->name, nc->name,
-					sizeof(crash_key->name));
-			__register_crash_key_cb(nc, crash_key);
-			if (__check_crash_key(crash_key)) {
-				pr_err("(%s) duplicated key combination found in %s\n",
-						__func__, nc->name);
-				goto __unregister_key;
-			}
-
-			list_add_tail(&crash_key->node, &key_crash_list);
-			pr_info("(%s) %s registered.\n",
-						__func__, crash_key->name);
-		} else {
-__unknown_key:
-			pr_err("(%s) unknown key found in %s\n",
-						__func__, nc->name);
-__unregister_key:
-			kfree(crash_key->keycode);
-			kfree(crash_key);
+			if (j == ARRAY_SIZE(__crash_key))
+				goto __unknown_key;
 		}
+
+		if (!of_property_read_u32(nc, "timeout", &timeout))
+			crash_key->timeout = timeout;
+		else
+			crash_key->timeout = dflt_crash_key.timeout;
+
+		crash_key->trigger = crash_key->keycode[crash_key->size - 1];
+		crash_key->knock = 1;
+
+		for (i = crash_key->size - 2; i >= 0; i--) {
+			if (crash_key->keycode[i] != crash_key->trigger)
+				break;
+			crash_key->knock++;
+		}
+
+		crash_key->unlock = 0;
+		for (i = 0; i < crash_key->size - crash_key->knock; i++)
+			crash_key->unlock |= 1 << i;
+
+		strlcpy(crash_key->name, nc->name, sizeof(crash_key->name));
+		__register_crash_key_cb(nc, crash_key);
+		if (__check_crash_key(crash_key)) {
+			pr_err("(%s) duplicated key combination found in %s\n",
+					__func__, nc->name);
+			goto __unregister_key;
+		}
+
+		list_add_tail(&crash_key->node, &key_crash_list);
+		pr_info("(%s) %s registered.\n",
+					__func__, crash_key->name);
+		continue;
+__unknown_key:
+		pr_err("(%s) unknown key found in %s\n",
+					__func__, nc->name);
+__unregister_key:
+		kfree(crash_key->keycode);
+		kfree(crash_key);
 	}
 #endif
 
-	if (!list_empty(&key_crash_list)) {
-		__sec_crash_key = sec_debug_get_first_key_entry();
-	} else {
-		pr_err("(%s) key crash list is empty.\n", __func__);
+	__sec_crash_key = sec_debug_get_first_key_entry();
+	if (!__sec_crash_key)
 		return;
-	}
 
 	__key_store = kmalloc_array(max_key_size, sizeof(unsigned int),
 			GFP_KERNEL);
@@ -1501,21 +1568,18 @@ __unregister_key:
 	return;
 
 __error:
-	if (crash_key) {
-		list_for_each_entry(crash_key, &__sec_crash_key->node, node) {
-			list_del(&crash_key->node);
+	list_for_each_entry(crash_key, &__sec_crash_key->node, node) {
+		list_del(&crash_key->node);
 
-			if (!crash_key->keycode)
-				kfree(crash_key->keycode);
-			kfree(crash_key);
-		}
+		if (!crash_key->keycode)
+			kfree(crash_key->keycode);
+		kfree(crash_key);
 	}
 }
 
 static int __init sec_debug_init_crash_key(void)
 {
-	if (enable)
-		__sec_debug_init_crash_key();
+	__sec_debug_init_crash_key();
 
 	return 0;
 }
@@ -1677,6 +1741,92 @@ void sec_do_bypass_sdi_execution_in_low(void)
 
 }
 
+static char ap_serial_from_cmdline[20];
+
+static int __init ap_serial_setup(char *str)
+{
+        snprintf(ap_serial_from_cmdline, sizeof(ap_serial_from_cmdline), "%s", &str[2]);
+        return 1;
+}
+__setup("androidboot.ap_serial=", ap_serial_setup);
+
+extern struct kset *devices_kset;
+
+struct bus_type chip_id_subsys = {
+        .name = "chip-id",
+        .dev_name = "chip-id",
+};
+
+static ssize_t ap_serial_show(struct kobject *kobj,
+                struct kobj_attribute *attr, char *buf)
+{
+        pr_info("%s: ap_serial:[%s]\n", __func__, ap_serial_from_cmdline);
+        return snprintf(buf, sizeof(ap_serial_from_cmdline), "%s\n", ap_serial_from_cmdline);
+}
+
+static struct kobj_attribute sysfs_SVC_AP_attr =
+__ATTR(SVC_AP, 0444, ap_serial_show, NULL);
+
+static struct kobj_attribute chipid_unique_id_attr =
+__ATTR(unique_id, 0444, ap_serial_show, NULL);
+
+static struct attribute *chip_id_attrs[] = {
+        &chipid_unique_id_attr.attr,
+        NULL,
+};
+
+static struct attribute_group chip_id_attr_group = {
+        .attrs = chip_id_attrs,
+};
+
+static const struct attribute_group *chip_id_attr_groups[] = {
+        &chip_id_attr_group,
+        NULL,
+};
+
+void create_ap_serial_node(void)
+{
+        int ret;
+        struct kernfs_node *svc_sd;
+        struct kobject *svc;
+        struct kobject *AP;
+
+        /* create /sys/devices/system/chip-id/unique_id */
+        if (subsys_system_register(&chip_id_subsys, chip_id_attr_groups))
+                pr_err("%s:Failed to register subsystem-%s\n", __func__, chip_id_subsys.name);
+
+        /* To find /sys/devices/svc/ */
+        svc_sd = sysfs_get_dirent(devices_kset->kobj.sd, "svc");
+        if (IS_ERR_OR_NULL(svc_sd)) {
+                svc = kobject_create_and_add("svc", &devices_kset->kobj);
+                if (IS_ERR_OR_NULL(svc)) {
+                        pr_err("%s:Failed to create sys/devices/svc : 0x%p\n", __func__, svc);
+                        goto skip_ap_serial;
+                } else {
+                        pr_err("%s:Success to create sys/devices/svc : 0x%p\n", __func__, svc);
+                }
+        } else {
+                svc = (struct kobject *)svc_sd->priv;
+                pr_err("%s:Success to find svc_sd : 0x%p svc : 0x%p\n", __func__, svc_sd, svc);
+        }
+        /* create /sys/devices/SVC/AP */
+        AP = kobject_create_and_add("AP", svc);
+        if (IS_ERR_OR_NULL(AP)) {
+                pr_err("%s:Failed to create sys/devices/svc/AP : 0x%p\n", __func__, AP);
+                goto skip_ap_serial;
+        } else {
+                pr_err("%s:Success to create sys/devices/svc/AP : 0x%p\n", __func__, AP);
+                /* create /sys/devices/svc/AP/SVC_AP */
+                ret = sysfs_create_file(AP, &sysfs_SVC_AP_attr.attr);
+                if (ret < 0) {
+                        pr_err("%s:sysfs create fail-%s\n", __func__, sysfs_SVC_AP_attr.attr.name);
+                }
+        }
+
+skip_ap_serial:
+        return;
+}
+
 int __init sec_debug_init(void)
 {
 	int ret;
@@ -1688,16 +1838,16 @@ int __init sec_debug_init(void)
 	register_reboot_notifier(&nb_reboot_block);
 	atomic_notifier_chain_register(&panic_notifier_list, &nb_panic_block);
 
-	if (unlikely(!enable)) {
-		sec_do_bypass_sdi_execution_in_low();
-		return -EPERM;
-	}
-
 	__init_sec_debug_log();
 
 	sec_debug_set_upload_magic(RESTART_REASON_SEC_DEBUG_MODE);
 	sec_debug_set_upload_cause(UPLOAD_CAUSE_INIT);
 
+        create_ap_serial_node();
+	if (unlikely(!sec_debug_is_enabled())) {
+		sec_do_bypass_sdi_execution_in_low();
+		return -EPERM;
+	}
 #ifdef CONFIG_SEC_DEBUG_CANCERIZER
 	atomic_set(&cmctx.nr_test, 0);
 	atomic_set(&cmctx.nr_running, 0);
@@ -1728,7 +1878,7 @@ int sec_debug_is_enabled_for_ssr(void)
 #endif
 
 #ifdef CONFIG_SEC_FILE_LEAK_DEBUG
-void sec_debug_print_file_list(void)
+int sec_debug_print_file_list(void)
 {
 	size_t i = 0;
 	unsigned int nCnt = 0;
@@ -1736,6 +1886,7 @@ void sec_debug_print_file_list(void)
 	struct files_struct *files = current->files;
 	const char *pRootName = NULL;
 	const char *pFileName = NULL;
+	int ret = 0;
 
 	nCnt = files->fdt->max_fds;
 
@@ -1763,9 +1914,14 @@ void sec_debug_print_file_list(void)
 			pr_err("[%04zd]%s%s\n", i,
 					pRootName ? pRootName : "null",
 					pFileName ? pFileName : "null");
+			ret++;
 		}
 		rcu_read_unlock();
 	}
+	if (ret > nCnt - 50)
+		return 1;
+	else
+		return 0;
 }
 
 void sec_debug_EMFILE_error_proc(void)
@@ -1782,8 +1938,8 @@ void sec_debug_EMFILE_error_proc(void)
 	if (!strcmp(current->group_leader->comm, "system_server") ||
 	    !strcmp(current->group_leader->comm, "mediaserver") ||
 	    !strcmp(current->group_leader->comm, "surfaceflinger")) {
-		sec_debug_print_file_list();
-		panic("Too many open files");
+		if (sec_debug_print_file_list() == 1)
+			panic("Too many open files");
 	}
 }
 #endif /* CONFIG_SEC_FILE_LEAK_DEBUG */
@@ -1805,7 +1961,7 @@ static inline long get_switch_state(struct task_struct *p)
 	return state;
 }
 
-static void __always_inline __sec_debug_task_sched_log(int cpu,
+static __always_inline void __sec_debug_task_sched_log(int cpu,
 		struct task_struct *task, struct task_struct *prev,
 		char *msg)
 {
@@ -2040,122 +2196,6 @@ static int __init sec_debug_user_fault_init(void)
 	return 0;
 }
 device_initcall(sec_debug_user_fault_init);
-
-#ifdef CONFIG_USER_RESET_DEBUG
-enum user_upload_cause_t {
-	USER_UPLOAD_CAUSE_SMPL = 1,		/* RESET_REASON_SMPL */
-	USER_UPLOAD_CAUSE_WTSR,			/* RESET_REASON_WTSR */
-	USER_UPLOAD_CAUSE_WATCHDOG,		/* RESET_REASON_WATCHDOG */
-	USER_UPLOAD_CAUSE_PANIC,		/* RESET_REASON_PANIC */
-	USER_UPLOAD_CAUSE_MANUAL_RESET,		/* RESET_REASON_MANUAL_RESET */
-	USER_UPLOAD_CAUSE_POWER_RESET,		/* RESET_REASON_POWER_RESET */
-	USER_UPLOAD_CAUSE_REBOOT,		/* RESET_REASON_REBOOT */
-	USER_UPLOAD_CAUSE_BOOTLOADER_REBOOT,	/* RESET_REASON_BOOTLOADER_REBOOT */
-	USER_UPLOAD_CAUSE_POWER_ON,		/* RESET_REASON_POWER_ON */
-	USER_UPLOAD_CAUSE_THERMAL,		/* RESET_REASON_THERMAL_RESET */
-	USER_UPLOAD_CAUSE_UNKNOWN,		/* RESET_REASON_UNKNOWN */
-};
-
-static int set_reset_reason_proc_show(struct seq_file *m, void *v)
-{
-	const char *msg[] = {
-		[USER_UPLOAD_CAUSE_SMPL] = "SPON\n",
-		[USER_UPLOAD_CAUSE_WTSR] = "WPON\n",
-		[USER_UPLOAD_CAUSE_WATCHDOG] = "DPON\n",
-		[USER_UPLOAD_CAUSE_PANIC] = "KPON\n",
-		[USER_UPLOAD_CAUSE_MANUAL_RESET] = "MPON\n",
-		[USER_UPLOAD_CAUSE_POWER_RESET] = "PPON\n",
-		[USER_UPLOAD_CAUSE_REBOOT] = "RPON\n",
-		[USER_UPLOAD_CAUSE_BOOTLOADER_REBOOT] = "BPON\n",
-		[USER_UPLOAD_CAUSE_POWER_ON] = "NPON\n",
-		[USER_UPLOAD_CAUSE_THERMAL] = "TPON\n",
-		[USER_UPLOAD_CAUSE_UNKNOWN] = "NPON\n",
-	};
-	size_t i = (reset_reason >= USER_UPLOAD_CAUSE_UNKNOWN || !reset_reason) ?
-			USER_UPLOAD_CAUSE_UNKNOWN : (size_t)reset_reason;
-
-	seq_puts(m, msg[i]);
-
-	return 0;
-}
-
-static int sec_reset_reason_proc_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, set_reset_reason_proc_show, NULL);
-}
-
-static const struct file_operations sec_reset_reason_proc_fops = {
-	.open		= sec_reset_reason_proc_open,
-	.read		= seq_read,
-	.llseek		= seq_lseek,
-	.release	= single_release,
-};
-
-static char *reset_extra_log;
-static unsigned reset_extra_size;
-
-void sec_set_reset_extra_info(char *last_kmsg_buffer, unsigned last_kmsg_size)
-{
-	reset_extra_log = last_kmsg_buffer;
-	reset_extra_size = last_kmsg_size;
-}
-
-static int set_reset_extra_info_proc_show(struct seq_file *m, void *v)
-{
-	char buf[RESET_EXTRA_INFO_SIZE];
-	char *find_str;
-	size_t buf_size;
-
-	if (reset_reason == USER_UPLOAD_CAUSE_PANIC) {
-#ifdef CONFIG_SEC_LOG_LAST_KMSG
-		find_str = strnstr(reset_extra_log,
-				"Internal error", reset_extra_size);
-		if (find_str != NULL) {
-			if ((find_str + RESET_EXTRA_INFO_SIZE) <
-					(reset_extra_log + reset_extra_size))
-				buf_size = RESET_EXTRA_INFO_SIZE;
-			else
-				buf_size = (reset_extra_log + reset_extra_size)
-					- find_str;
-			snprintf(buf, buf_size, "%s", find_str);
-		} else
-			sprintf(buf, "Couldn't search reset extra info!!!\n");
-#else /* CONFIG_SEC_LOG_LAST_KMSG */
-		sprintf(buf, "This project doesn't support LAST_KMSG!!!\n");
-#endif /* CONFIG_SEC_LOG_LAST_KMSG */
-		seq_printf(m, buf);
-	}
-
-	return 0;
-}
-
-static int sec_reset_extra_info_proc_open(struct inode *inode,
-			struct file *file)
-{
-	return single_open(file, set_reset_extra_info_proc_show, NULL);
-}
-
-static const struct file_operations sec_reset_extra_info_proc_fops = {
-	.open = sec_reset_extra_info_proc_open,
-	.read = seq_read,
-	.llseek = seq_lseek,
-	.release = single_release,
-};
-
-static int __init sec_debug_reset_reason_init(void)
-{
-	if (!proc_create("reset_reason", S_IRUSR, NULL,
-			&sec_reset_reason_proc_fops))
-		return -ENOMEM;
-
-	if (!proc_create("reset_reason_extra_info", S_IRUSR, NULL,
-			&sec_reset_extra_info_proc_fops))
-		return -ENOMEM;
-
-	return 0;
-}
-device_initcall(sec_debug_reset_reason_init);
-#endif
 
 #ifdef CONFIG_SEC_DEBUG_DCVS_LOG
 void sec_debug_dcvs_log(int cpu_no, unsigned int prev_freq,

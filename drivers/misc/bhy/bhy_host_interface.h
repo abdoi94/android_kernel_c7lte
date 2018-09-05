@@ -70,7 +70,7 @@
 #define BHY_C1_PRODUCT_ID	0x81
 #define BST_FPGA_PRODUCT_ID_7183	0x83
 #define BHY_RESET_WAIT_RETRY	1000
-#define BHY_DEF_RAM_PATCH_FILE_PATH	"/system/vendor/firmware/ram_patch.fw"
+#define BHY_DEF_RAM_PATCH_FILE_PATH	"/system/vendor/bhy_firmware/ram_patch.fw"
 #define BHY_FIFO_LEN_MAX	(30 * 1024)
 #define BHY_FIFO_READ_LEN	50	/* must be multiple of 50 */
 #define BHY_PARAM_ACK_WAIT_RETRY	100
@@ -221,12 +221,12 @@ struct __attribute__((__packed__)) ram_patch_header {
 #define BHY_SENSOR_DATA_LEN_DEBUG	13
 #define BHY_SENSOR_DATA_LEN_CUSTOM_1	1
 #define BHY_SENSOR_DATA_LEN_CUSTOM_2	7
-#define BHY_SENSOR_DATA_LEN_CUSTOM_3	14
+#define BHY_SENSOR_DATA_LEN_CUSTOM_3	18
 #define BHY_SENSOR_DATA_LEN_CUSTOM_4	1
 #define BHY_SENSOR_DATA_LEN_CUSTOM_5	7
 #define BHY_SENSOR_DATA_LEN_CUSTOM_1_WU	7
 #define BHY_SENSOR_DATA_LEN_CUSTOM_2_WU	7
-#define BHY_SENSOR_DATA_LEN_CUSTOM_3_WU	14
+#define BHY_SENSOR_DATA_LEN_CUSTOM_3_WU	18
 #define BHY_SENSOR_DATA_LEN_CUSTOM_4_WU	1
 #define BHY_SENSOR_DATA_LEN_CUSTOM_5_WU	7
 #define BHY_SENSOR_DATA_LEN_MAX	16

@@ -65,6 +65,16 @@ struct sec_fg_info {
 	/* battery info */
 	int soc;
 
+	/* copy from platform data /
+	 * DTS or update by shell script */
+	int battery_table1[88];
+	int battery_table2[22];
+	int battery_table3[88];
+	int battery_table4[22];
+	int soc_arr_evt2[22];
+	int ocv_arr_evt2[22];
+	int batcap[4];
+
 	/* miscellaneous */
 	unsigned long fullcap_check_interval;
 	int full_check_flag;
@@ -79,6 +89,7 @@ struct s2mu005_platform_data {
 	int fuel_alert_soc;
 	int fullsocthr;
 	int fg_irq;
+	int fg_log_enable;
 
 	char *fuelgauge_name;
 
@@ -99,6 +110,7 @@ struct s2mu005_fuelgauge_data {
 	int cable_type;
 	bool is_charging;
 	int mode;
+	int revision;
 
 	/* HW-dedicated fuel guage info structure
 	 * used in individual fuel gauge file only
@@ -113,6 +125,7 @@ struct s2mu005_fuelgauge_data {
 	unsigned int standard_capacity;
 
 	bool initial_update_of_soc;
+	bool sleep_initial_update_of_soc;
 	struct mutex fg_lock;
 	struct delayed_work isr_work;
 
@@ -125,5 +138,11 @@ struct s2mu005_fuelgauge_data {
 	int diff_soc;
 	int target_ocv;
 	int vm_soc;
+	bool cc_on;
+	
+	sec_bat_adc_table_data_t *temp_table;
+	unsigned int temp_table_size;
+
+	bool temperature_compensation;
 };
 #endif /* __S2MU005_FUELGAUGE_H */

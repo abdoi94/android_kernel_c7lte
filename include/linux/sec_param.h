@@ -18,6 +18,8 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
 
+#ifndef _SEC_PARAM_H_
+#define _SEC_PARAM_H_
 
 struct sec_param_data {
 	unsigned int debuglevel;
@@ -31,7 +33,7 @@ struct sec_param_data {
 #else
 	unsigned int reserved0;
 #endif
-	unsigned int reserved1[3]; /* for CONFIG_RTC_PWRON */
+	unsigned int reserved1[3]; /* CONFIG_RTC_AUTO_PWRON */
 #ifdef CONFIG_SEC_MONITOR_BATTERY_REMOVAL
 	unsigned int normal_poweroff;
 #else
@@ -65,10 +67,17 @@ struct sec_param_data {
 #endif
 	unsigned int cp_reserved_mem;
 	char param_carrierid[4]; //only use 3digits, 1 for null
+	char param_sales[4]; //only use 3digits, 1 for null
+	char param_lcd_resolution[8]; // Variable LCD resolution
+        unsigned int UserPartitionFlashed;
+	char prototype_serial[16];
+	unsigned int apigpiotest;
+	char apigpiotestresult[256];
+	char reboot_recovery_cause[256];
 };
 
 struct sec_param_data_s {
-	struct work_struct sec_param_work;
+	struct delayed_work sec_param_work;
 	struct completion work;
 	void *value;
 	unsigned int offset;
@@ -102,8 +111,32 @@ enum sec_param_index {
 	param_index_skutheme_info,
 #endif
 	param_index_cp_reserved_mem,
+#ifdef CONFIG_USER_RESET_DEBUG
+	param_index_last_reset_reason,
+#endif
+#ifdef CONFIG_SEC_NAD
+	param_index_qnad,
+	param_index_qnad_ddr_result,
+#endif	
+        param_index_UserPartitionFlash,
+	param_index_prototype_serial,
+	param_index_apigpiotest,
+	param_index_apigpiotestresult,
+	param_index_reboot_recovery_cause,
+	param_index_max_sec_param_data,
 };
 
 extern bool sec_get_param(enum sec_param_index index, void *value);
 extern bool sec_set_param(enum sec_param_index index, void *value);
 
+#define SEC_PARAM_FILE_OFFSET	(param_file_size - 0x100000)
+
+#define SEC_PARAM_LAST_RESET_REASON		(param_file_size - 4096)
+
+#ifdef CONFIG_SEC_NAD
+#define SEC_PARAM_NAD_OFFSET			(8*1024*1024)
+#define SEC_PARAM_NAD_SIZE			(0x2000) /* 8KB */
+#define SEC_PARAM_NAD_DDR_RESULT_OFFSET		(SEC_PARAM_NAD_OFFSET + SEC_PARAM_NAD_SIZE) /* 8MB + 8KB */
+#endif
+
+#endif /* _SEC_PARAM_H_ */

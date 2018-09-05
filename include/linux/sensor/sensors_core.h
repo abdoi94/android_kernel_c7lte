@@ -19,13 +19,15 @@
 #ifndef _SENSORS_CORE_H_
 #define _SENSORS_CORE_H_
 
-#define SENSOR_ERR(fmt, ...) pr_err("[SENSOR] %s: "fmt, __func__, ##__VA_ARGS__)
-#define SENSOR_INFO(fmt, ...) pr_info("[SENSOR] %s: "fmt, __func__, ##__VA_ARGS__)
-#define SENSOR_WARN(fmt, ...) pr_warn("[SENSOR] %s: "fmt, __func__, ##__VA_ARGS__)
+#define TAG ""
+
+#define SENSOR_ERR(fmt, ...) pr_err("[SENSOR]%s %s: "fmt, TAG, __func__, ##__VA_ARGS__)
+#define SENSOR_INFO(fmt, ...) pr_info("[SENSOR]%s %s: "fmt, TAG, __func__, ##__VA_ARGS__)
+#define SENSOR_WARN(fmt, ...) pr_warn("[SENSOR]%s %s: "fmt, TAG, __func__, ##__VA_ARGS__)
 
 int sensors_create_symlink(struct kobject *, const char *);
 void sensors_remove_symlink(struct kobject *, const char *);
-int sensors_register(struct device *, void *,
+int sensors_register(struct device **, void *,
 	struct device_attribute *[], char *);
 void sensors_unregister(struct device *, struct device_attribute *[]);
 void destroy_sensor_class(void);

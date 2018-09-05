@@ -68,6 +68,12 @@ enum camb_position_t {
 	INVALID_CAMERA_B,
 };
 
+enum flash_position_t {
+	BACK_FLASH,
+	FRONT_FLASH,
+	INVALID_FLASH,
+};
+
 enum msm_sensor_power_seq_type_t {
 	SENSOR_CLK,
 	SENSOR_GPIO,
@@ -113,6 +119,9 @@ enum msm_sensor_power_seq_gpio_t {
 
 enum msm_camera_vreg_name_t {
 	CAM_VDIG,
+#if defined(CONFIG_SEC_C5PROLTE_CHN) || defined(CONFIG_SEC_C7PROLTE_CHN) || defined(CONFIG_SEC_C7PROLTE_SWA)
+	CAM_VT_VDIG,
+#endif
 	CAM_VIO,
 	CAM_VANA,
 	CAM_VT_VANA,
@@ -170,6 +179,7 @@ enum msm_flash_driver_type {
 	FLASH_DRIVER_PMIC,
 	FLASH_DRIVER_I2C,
 	FLASH_DRIVER_GPIO,
+	FLASH_DRIVER_EXT_PMIC,
 	FLASH_DRIVER_DEFAULT
 };
 
@@ -179,6 +189,7 @@ enum msm_flash_cfg_type_t {
 	CFG_FLASH_OFF,
 	CFG_FLASH_LOW,
 	CFG_FLASH_HIGH,
+	CFG_FLASH_TORCH,
 };
 
 enum msm_sensor_output_format_t {

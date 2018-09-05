@@ -23,11 +23,6 @@ Copyright (C) 2012, Samsung Electronics. All rights reserved.
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
- * 02110-1301, USA.
- *
 */
 #ifndef _SAMSUNG_DSI_TCON_MDNIE_LIGHT_H_
 #define _SAMSUNG_DSI_TCON_MDNIE_LIGHT_H_
@@ -38,7 +33,9 @@ Copyright (C) 2012, Samsung Electronics. All rights reserved.
 
 #define NAME_STRING_MAX 30
 #define MDNIE_COLOR_BLINDE_CMD_SIZE 18
+#define MDNIE_COLOR_BLINDE_HBM_CMD_SIZE 24
 #define COORDINATE_DATA_SIZE 6
+#define MDNIE_SCR_CMD_SIZE 24
 
 extern char mdnie_app_name[][NAME_STRING_MAX];
 extern char mdnie_mode_name[][NAME_STRING_MAX];
@@ -67,6 +64,8 @@ enum APP {
 	GAME_LOW_APP,
 	GAME_MID_APP,
 	GAME_HIGH_APP,
+	VIDEO_ENHANCER,
+	VIDEO_ENHANCER_THIRD,
 	TDMB_APP,	/* is linked to APP_ID_TDMB */
 	MAX_APP_MODE,
 };
@@ -96,6 +95,7 @@ enum ACCESSIBILITY {
 	CURTAIN,
 	GRAYSCALE,
 	GRAYSCALE_NEGATIVE,
+	COLOR_BLIND_HBM,
 	ACCESSIBILITY_MAX,
 };
 
@@ -114,9 +114,58 @@ enum HMT_COLOR_TEMPERATURE {
 	HMT_COLOR_TEMP_3000K, /* 3000K */
 	HMT_COLOR_TEMP_4000K, /* 4000K */
 	HMT_COLOR_TEMP_5000K, /* 5000K */
-	HMT_COLOR_TEMP_6500K, /* 6500K + gamma 2.2 */
-	HMT_COLOR_TEMP_7500K, /* 7500K + gamma 2.2 */
+	HMT_COLOR_TEMP_6500K, /* 6500K */
+	HMT_COLOR_TEMP_7500K, /* 7500K */
 	HMT_COLOR_TEMP_MAX
+};
+
+enum HDR {
+	HDR_OFF = 0,
+	HDR_1,
+	HDR_2,
+	HDR_3,
+	HDR_MAX
+};
+
+enum COLOR_LENS {
+	COLOR_LENS_OFF = 0,
+	COLOR_LENS_ON,
+	COLOR_LENS_MAX
+};
+
+enum COLOR_LENS_COLOR {
+	COLOR_LENS_COLOR_BLUE = 0,
+	COLOR_LENS_COLOR_AZURE,
+	COLOR_LENS_COLOR_CYAN,
+	COLOR_LENS_COLOR_SPRING_GREEN,
+	COLOR_LENS_COLOR_GREEN,
+	COLOR_LENS_COLOR_CHARTREUSE_GREEN,
+	COLOR_LENS_COLOR_YELLOW,
+	COLOR_LENS_COLOR_ORANGE,
+	COLOR_LENS_COLOR_RED,
+	COLOR_LENS_COLOR_ROSE,
+	COLOR_LENS_COLOR_MAGENTA,
+	COLOR_LENS_COLOR_VIOLET,
+	COLOR_LENS_COLOR_MAX
+};
+
+enum COLOR_LENS_LEVEL {
+	COLOR_LENS_LEVEL_20P = 0,
+	COLOR_LENS_LEVEL_25P,
+	COLOR_LENS_LEVEL_30P,
+	COLOR_LENS_LEVEL_35P,
+	COLOR_LENS_LEVEL_40P,
+	COLOR_LENS_LEVEL_45P,
+	COLOR_LENS_LEVEL_50P,
+	COLOR_LENS_LEVEL_55P,
+	COLOR_LENS_LEVEL_60P,
+	COLOR_LENS_LEVEL_MAX,
+};
+
+enum LIGHT_NOTIFICATION {
+	LIGHT_NOTIFICATION_OFF = 0,
+	LIGHT_NOTIFICATION_ON,
+	LIGHT_NOTIFICATION_MAX,
 };
 
 struct mdnie_lite_tun_type {
@@ -129,15 +178,33 @@ struct mdnie_lite_tun_type {
 	enum OUTDOOR outdoor;
 	enum ACCESSIBILITY mdnie_accessibility;
 	enum HMT_COLOR_TEMPERATURE hmt_color_temperature;
+	enum HDR hdr;
+	enum LIGHT_NOTIFICATION light_notification;
 
 	char scr_white_red;
 	char scr_white_green;
 	char scr_white_blue;
 
+	int scr_white_balanced_red;
+	int scr_white_balanced_green;
+	int scr_white_balanced_blue;
+
+	int night_mode_enable;
+	int night_mode_index;
+
+	int ldu_mode_index;
+
+	int color_lens_enable;
+	int color_lens_color;
+	int color_lens_level;
+
 	int index;
 	struct list_head used_list;
 
 	struct samsung_display_driver_data *vdd;
+#ifdef CONFIG_DISPLAY_USE_INFO
+	struct notifier_block dpui_notif;
+#endif
 };
 
 extern int config_cabc(int value);
@@ -193,6 +260,12 @@ struct mdnie_lite_tune_data {
 	char *DSI0_TDMB_DYNAMIC_MDNIE_2;
 	char *DSI0_TDMB_STANDARD_MDNIE_2;
 	char *DSI0_TDMB_AUTO_MDNIE_2;
+	char *DSI0_NIGHT_MODE_MDNIE_1;
+	char *DSI0_NIGHT_MODE_MDNIE_2;
+	char *DSI0_NIGHT_MODE_MDNIE_SCR;
+	char *DSI0_COLOR_LENS_MDNIE_1;
+	char *DSI0_COLOR_LENS_MDNIE_2;
+	char *DSI0_COLOR_LENS_MDNIE_SCR;
 
 	struct dsi_cmd_desc *DSI0_BYPASS_MDNIE;
 	struct dsi_cmd_desc *DSI0_NEGATIVE_MDNIE;
@@ -250,9 +323,13 @@ struct mdnie_lite_tune_data {
 	struct dsi_cmd_desc *DSI0_TDMB_NATURAL_MDNIE;
 	struct dsi_cmd_desc *DSI0_TDMB_MOVIE_MDNIE;
 	struct dsi_cmd_desc *DSI0_TDMB_AUTO_MDNIE;
+	struct dsi_cmd_desc *DSI0_NIGHT_MODE_MDNIE;
+	struct dsi_cmd_desc *DSI0_COLOR_LENS_MDNIE;
 
 	struct dsi_cmd_desc *(*mdnie_tune_value_dsi0)[MAX_MODE][MAX_OUTDOOR_MODE];
 	struct dsi_cmd_desc **hmt_color_temperature_tune_value_dsi0;
+	struct dsi_cmd_desc **hdr_tune_value_dsi0;
+	struct dsi_cmd_desc **light_notification_tune_value_dsi0;
 
 	int dsi0_bypass_mdnie_size;
 	int mdnie_color_blinde_cmd_offset;
@@ -264,7 +341,17 @@ struct mdnie_lite_tune_data {
 	int dsi0_trans_dimming_data_index;
 	char **dsi0_adjust_ldu_table;
 	int dsi0_max_adjust_ldu;
+	char *dsi0_night_mode_table;
+	int dsi0_max_night_mode_index;
+	char *dsi0_color_lens_table;
 	int dsi0_scr_step_index;
+	char dsi0_white_default_r;
+	char dsi0_white_default_g;
+	char dsi0_white_default_b;
+	int dsi0_white_rgb_enabled;
+	char dsi0_white_ldu_r;
+	char dsi0_white_ldu_g;
+	char dsi0_white_ldu_b;
 
 /*******************************************
 *					DSI1 DATA
@@ -300,6 +387,12 @@ struct mdnie_lite_tune_data {
 	char *DSI1_TDMB_DYNAMIC_MDNIE_2;
 	char *DSI1_TDMB_STANDARD_MDNIE_2;
 	char *DSI1_TDMB_AUTO_MDNIE_2;
+	char *DSI1_NIGHT_MODE_MDNIE_1;
+	char *DSI1_NIGHT_MODE_MDNIE_2;
+	char *DSI1_NIGHT_MODE_MDNIE_SCR;
+	char *DSI1_COLOR_LENS_MDNIE_1;
+	char *DSI1_COLOR_LENS_MDNIE_2;
+	char *DSI1_COLOR_LENS_MDNIE_SCR;
 
 	struct dsi_cmd_desc *DSI1_BYPASS_MDNIE;
 	struct dsi_cmd_desc *DSI1_NEGATIVE_MDNIE;
@@ -349,14 +442,21 @@ struct mdnie_lite_tune_data {
 	struct dsi_cmd_desc *DSI1_EBOOK_MOVIE_MDNIE;
 	struct dsi_cmd_desc *DSI1_EBOOK_AUTO_MDNIE;
 	struct dsi_cmd_desc *DSI1_EMAIL_AUTO_MDNIE;
+	struct dsi_cmd_desc *DSI1_GAME_LOW_MDNIE;
+	struct dsi_cmd_desc *DSI1_GAME_MID_MDNIE;
+	struct dsi_cmd_desc *DSI1_GAME_HIGH_MDNIE;
 	struct dsi_cmd_desc *DSI1_TDMB_DYNAMIC_MDNIE;
 	struct dsi_cmd_desc *DSI1_TDMB_STANDARD_MDNIE;
 	struct dsi_cmd_desc *DSI1_TDMB_NATURAL_MDNIE;
 	struct dsi_cmd_desc *DSI1_TDMB_MOVIE_MDNIE;
 	struct dsi_cmd_desc *DSI1_TDMB_AUTO_MDNIE;
+	struct dsi_cmd_desc *DSI1_NIGHT_MODE_MDNIE;
+	struct dsi_cmd_desc *DSI1_COLOR_LENS_MDNIE;
 
 	struct dsi_cmd_desc *(*mdnie_tune_value_dsi1)[MAX_MODE][MAX_OUTDOOR_MODE];
 	struct dsi_cmd_desc **hmt_color_temperature_tune_value_dsi1;
+	struct dsi_cmd_desc **hdr_tune_value_dsi1;
+	struct dsi_cmd_desc **light_notification_tune_value_dsi1;
 
 	int dsi1_bypass_mdnie_size;
 	/* int mdnie_color_blinde_cmd_offset; */
@@ -368,7 +468,17 @@ struct mdnie_lite_tune_data {
 	int dsi1_trans_dimming_data_index;
 	char **dsi1_adjust_ldu_table;
 	int dsi1_max_adjust_ldu;
+	char *dsi1_night_mode_table;
+	int dsi1_max_night_mode_index;
+	char *dsi1_color_lens_table;
 	int dsi1_scr_step_index;
+	char dsi1_white_default_r;
+	char dsi1_white_default_g;
+	char dsi1_white_default_b;
+	int dsi1_white_rgb_enabled;
+	char dsi1_white_ldu_r;
+	char dsi1_white_ldu_g;
+	char dsi1_white_ldu_b;
 };
 
 /* COMMON FUNCTION*/
@@ -376,6 +486,8 @@ struct mdnie_lite_tun_type *init_dsi_tcon_mdnie_class(int index, struct samsung_
 int update_dsi_tcon_mdnie_register(struct samsung_display_driver_data *vdd);
 void coordinate_tunning(int index, char *coordinate_data, int scr_wr_addr, int data_size);
 void coordinate_tunning_multi(int index, char (*coordinate_data_multi[MAX_MODE])[COORDINATE_DATA_SIZE], int mdnie_tune_index, int scr_wr_addr, int data_size);
+void coordinate_tunning_calculate(int index, int x, int y, char (*coordinate_data_multi[MAX_MODE])[COORDINATE_DATA_SIZE],  int *rgb_index, int scr_wr_addr, int data_size);
+
 /* COMMON FUNCTION END*/
 
 #endif /*_DSI_TCON_MDNIE_H_*/

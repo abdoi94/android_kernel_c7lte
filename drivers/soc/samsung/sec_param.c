@@ -28,12 +28,14 @@
 #include <linux/file.h>
 #include <linux/syscalls.h>
 #include <linux/delay.h>
+#include <linux/sec_debug.h>
+#ifdef CONFIG_SEC_NAD
+#include <linux/sec_nad.h>
+#endif
 
 #define PARAM_RD	0
 #define PARAM_WR	1
 
-#define SEC_PARAM_FILE_SIZE	0xC00000		/* 4 MB */
-#define SEC_PARAM_FILE_OFFSET (SEC_PARAM_FILE_SIZE - 0x100000)
 #define MAX_PARAM_BUFFER	128
 
 static DEFINE_MUTEX(sec_param_mutex);
@@ -41,6 +43,8 @@ static DEFINE_MUTEX(sec_param_mutex);
 /* single global instance */
 struct sec_param_data *param_data;
 struct sec_param_data_s sched_sec_param_data;
+
+static unsigned int param_file_size;
 
 static char param_name[MAX_PARAM_BUFFER];
 static __init int get_param_name(char *str)
@@ -55,6 +59,21 @@ static __init int get_param_name(char *str)
 }
 __setup("androidboot.bootdevice=", get_param_name);
 
+static int __init sec_get_param_file_size_setup(char *str)
+{
+	int ret;
+	unsigned long long size = 0;
+
+	ret = kstrtoull(str, 0, &size);
+	if (ret)
+		pr_err("%s str:%s\n", __func__, str);
+	else
+		param_file_size = (unsigned int)size;
+
+	return 1;
+}
+__setup("sec_param_file_size=", sec_get_param_file_size_setup);
+
 static void param_sec_operation(struct work_struct *work)
 {
 	/* Read from PARAM(parameter) partition  */
@@ -62,11 +81,13 @@ static void param_sec_operation(struct work_struct *work)
 	mm_segment_t fs;
 	int ret;
 	struct sec_param_data_s *sched_param_data =
-		container_of(work, struct sec_param_data_s, sec_param_work);
+		container_of(to_delayed_work(work), struct sec_param_data_s, sec_param_work);
 
 	int flag = (sched_param_data->direction == PARAM_WR)
 			? (O_RDWR | O_SYNC) : O_RDONLY;
+	unsigned long delay = 5 * HZ;
 
+	pr_info("%s - start.\n", __func__);
 	pr_debug("%s %p %x %d %d\n", __func__, sched_param_data->value,
 			sched_param_data->offset, sched_param_data->size,
 			sched_param_data->direction);
@@ -80,7 +101,7 @@ static void param_sec_operation(struct work_struct *work)
 	if (IS_ERR(filp)) {
 		pr_err("%s: filp_open failed. (%ld)\n",
 				__func__, PTR_ERR(filp));
-		complete(&sched_sec_param_data.work);
+		goto openfail_retry;
 		return;
 	}
 
@@ -90,7 +111,7 @@ static void param_sec_operation(struct work_struct *work)
 	ret = filp->f_op->llseek(filp, sched_param_data->offset, SEEK_SET);
 	if (unlikely(ret < 0)) {
 		pr_err("%s FAIL LLSEEK\n", __func__);
-		goto param_sec_debug_out;
+		goto seekfail_retry;
 	}
 
 	if (sched_param_data->direction == PARAM_RD)
@@ -102,55 +123,58 @@ static void param_sec_operation(struct work_struct *work)
 				(char __user *)sched_param_data->value,
 				sched_param_data->size, &filp->f_pos);
 
-param_sec_debug_out:
 	set_fs(fs);
 	filp_close(filp, NULL);
 	complete(&sched_sec_param_data.work);
+	pr_info("%s - end.\n", __func__);
+	return;
+
+seekfail_retry:
+	set_fs(fs);
+	filp_close(filp, NULL);
+openfail_retry:
+	schedule_delayed_work(&sched_sec_param_data.sec_param_work, delay);
+	pr_info("%s - end, will retry.\n", __func__);
 }
 
 bool sec_open_param(void)
 {
-	pr_info("%s start \n",__func__);
+	pr_info("%s start\n", __func__);
 
-	if (param_data != NULL)
-		return true;
+	if (!param_data)
+		param_data = kmalloc(sizeof(struct sec_param_data), GFP_KERNEL);
 
-	mutex_lock(&sec_param_mutex);
+	if (unlikely(!param_data)) {
+		pr_err("failed to alloc for param_data\n");
+		return false;
+	}
 
-	param_data = kmalloc(sizeof(struct sec_param_data), GFP_KERNEL);
+	sched_sec_param_data.value = param_data;
+	sched_sec_param_data.offset = SEC_PARAM_FILE_OFFSET;
+	sched_sec_param_data.size = sizeof(struct sec_param_data);
+	sched_sec_param_data.direction = PARAM_RD;
 
-	sched_sec_param_data.value=param_data;
-	sched_sec_param_data.offset=SEC_PARAM_FILE_OFFSET;
-	sched_sec_param_data.size=sizeof(struct sec_param_data);
-	sched_sec_param_data.direction=PARAM_RD;
-
-	schedule_work(&sched_sec_param_data.sec_param_work);
+	schedule_delayed_work(&sched_sec_param_data.sec_param_work, 0);
 	wait_for_completion(&sched_sec_param_data.work);
 
-	mutex_unlock(&sec_param_mutex);
-
-	pr_info("%s end \n",__func__);
+	pr_info("%s end\n", __func__);
 
 	return true;
 }
 
 bool sec_write_param(void)
 {
-	pr_info("%s start\n",__func__);
+	pr_info("%s start\n", __func__);
 
-	mutex_lock(&sec_param_mutex);
+	sched_sec_param_data.value = param_data;
+	sched_sec_param_data.offset = SEC_PARAM_FILE_OFFSET;
+	sched_sec_param_data.size = sizeof(struct sec_param_data);
+	sched_sec_param_data.direction = PARAM_WR;
 
-	sched_sec_param_data.value=param_data;
-	sched_sec_param_data.offset=SEC_PARAM_FILE_OFFSET;
-	sched_sec_param_data.size=sizeof(struct sec_param_data);
-	sched_sec_param_data.direction=PARAM_WR;
-
-	schedule_work(&sched_sec_param_data.sec_param_work);
+	schedule_delayed_work(&sched_sec_param_data.sec_param_work, 0);
 	wait_for_completion(&sched_sec_param_data.work);
 
-	mutex_unlock(&sec_param_mutex);
-
-	pr_info("%s end\n",__func__);
+	pr_info("%s end\n", __func__);
 
 	return true;
 }
@@ -159,9 +183,11 @@ bool sec_get_param(enum sec_param_index index, void *value)
 {
 	int ret;
 
+	mutex_lock(&sec_param_mutex);
+
 	ret = sec_open_param();
 	if (!ret)
-		return ret;
+		goto out;
 
 	switch (index) {
 	case param_index_debuglevel:
@@ -217,21 +243,65 @@ bool sec_get_param(enum sec_param_index index, void *value)
 		memcpy(value, &(param_data->cp_reserved_mem),
 				sizeof(unsigned int));
 		break;
+#ifdef CONFIG_USER_RESET_DEBUG
+	case param_index_last_reset_reason:
+		sched_sec_param_data.value = value;
+		sched_sec_param_data.offset = SEC_PARAM_LAST_RESET_REASON;
+		sched_sec_param_data.size = sizeof(uint32_t);
+		sched_sec_param_data.direction = PARAM_RD;
+		schedule_delayed_work(&sched_sec_param_data.sec_param_work, 0);
+		wait_for_completion(&sched_sec_param_data.work);
+		break;
+#endif
+#ifdef CONFIG_SEC_NAD
+	case param_index_qnad:
+		sched_sec_param_data.value=value;
+		sched_sec_param_data.offset=SEC_PARAM_NAD_OFFSET;
+		sched_sec_param_data.size=sizeof(struct param_qnad);
+		sched_sec_param_data.direction=PARAM_RD;
+		schedule_delayed_work(&sched_sec_param_data.sec_param_work, 0);
+		wait_for_completion(&sched_sec_param_data.work);
+		break;
+	case param_index_qnad_ddr_result:
+		sched_sec_param_data.value=value;
+		sched_sec_param_data.offset=SEC_PARAM_NAD_DDR_RESULT_OFFSET;
+		sched_sec_param_data.size=sizeof(struct param_qnad_ddr_result);
+		sched_sec_param_data.direction=PARAM_RD;
+		schedule_delayed_work(&sched_sec_param_data.sec_param_work, 0);
+		wait_for_completion(&sched_sec_param_data.work);
+		break;
+#endif
+	case param_index_apigpiotest:
+		memcpy(value, &(param_data->apigpiotest),
+			sizeof(param_data->apigpiotest));
+		break;
+	case param_index_apigpiotestresult:
+		memcpy(value, param_data->apigpiotestresult,
+			sizeof(param_data->apigpiotestresult));
+		break;
+	case param_index_reboot_recovery_cause:
+		memcpy(value, param_data->reboot_recovery_cause,
+				sizeof(param_data->reboot_recovery_cause));
+		break;
 	default:
-		return false;
+		ret = false;
 	}
 
-	return true;
+out:
+	mutex_unlock(&sec_param_mutex);
+	return ret;
 }
 EXPORT_SYMBOL(sec_get_param);
 
 bool sec_set_param(enum sec_param_index index, void *value)
 {
-	int ret;
+	bool ret;
+
+	mutex_lock(&sec_param_mutex);
 
 	ret = sec_open_param();
 	if (!ret)
-		return ret;
+		goto out;
 
 	switch (index) {
 	case param_index_debuglevel:
@@ -288,12 +358,55 @@ bool sec_set_param(enum sec_param_index index, void *value)
 		memcpy(&(param_data->cp_reserved_mem),
 				value, sizeof(unsigned int));
 		break;
+#ifdef CONFIG_USER_RESET_DEBUG
+	case param_index_last_reset_reason:
+		sched_sec_param_data.value=(uint32_t *)value;
+		sched_sec_param_data.offset=SEC_PARAM_LAST_RESET_REASON;
+		sched_sec_param_data.size=sizeof(uint32_t);
+		sched_sec_param_data.direction=PARAM_WR;
+		schedule_delayed_work(&sched_sec_param_data.sec_param_work, 0);
+		wait_for_completion(&sched_sec_param_data.work);
+		break;
+#endif
+#ifdef CONFIG_SEC_NAD
+	case param_index_qnad:
+		sched_sec_param_data.value=(struct param_qnad *)value;
+		sched_sec_param_data.offset=SEC_PARAM_NAD_OFFSET;
+		sched_sec_param_data.size=sizeof(struct param_qnad);
+		sched_sec_param_data.direction=PARAM_WR;
+		schedule_delayed_work(&sched_sec_param_data.sec_param_work, 0);
+		wait_for_completion(&sched_sec_param_data.work);
+		break;
+	case param_index_qnad_ddr_result:
+		sched_sec_param_data.value=(struct param_qnad_ddr_result *)value;
+		sched_sec_param_data.offset=SEC_PARAM_NAD_DDR_RESULT_OFFSET;
+		sched_sec_param_data.size=sizeof(struct param_qnad_ddr_result);
+		sched_sec_param_data.direction=PARAM_WR;
+		schedule_delayed_work(&sched_sec_param_data.sec_param_work, 0);
+		wait_for_completion(&sched_sec_param_data.work);
+		break;
+#endif
+	case param_index_apigpiotest:
+		memcpy(&(param_data->apigpiotest),
+				value, sizeof(param_data->apigpiotest));
+		break;
+	case param_index_apigpiotestresult:
+		memcpy(&(param_data->apigpiotestresult),
+				value, sizeof(param_data->apigpiotestresult));
+		break;
+	case param_index_reboot_recovery_cause:
+		memcpy(param_data->reboot_recovery_cause,
+				value, sizeof(param_data->reboot_recovery_cause));
+		break;
 	default:
-		return false;
+		ret = false;
+		goto out;
 	}
 
 	ret = sec_write_param();
 
+out:
+	mutex_unlock(&sec_param_mutex);
 	return ret;
 }
 EXPORT_SYMBOL(sec_set_param);
@@ -302,13 +415,13 @@ static int __init sec_param_work_init(void)
 {
 	pr_info("%s: start\n", __func__);
 
-	sched_sec_param_data.offset=0;
-	sched_sec_param_data.direction=0;
-	sched_sec_param_data.size=0;
-	sched_sec_param_data.value=NULL;
+	sched_sec_param_data.offset = 0;
+	sched_sec_param_data.direction = 0;
+	sched_sec_param_data.size = 0;
+	sched_sec_param_data.value = NULL;
 
 	init_completion(&sched_sec_param_data.work);
-	INIT_WORK(&sched_sec_param_data.sec_param_work, param_sec_operation);
+	INIT_DELAYED_WORK(&sched_sec_param_data.sec_param_work, param_sec_operation);
 
 	pr_info("%s: end\n", __func__);
 
@@ -317,7 +430,7 @@ static int __init sec_param_work_init(void)
 
 static void __exit sec_param_work_exit(void)
 {
-	cancel_work_sync(&sched_sec_param_data.sec_param_work);
+	cancel_delayed_work_sync(&sched_sec_param_data.sec_param_work);
 	pr_info("%s: exit\n", __func__);
 }
 

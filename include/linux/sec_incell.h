@@ -16,6 +16,7 @@
 struct incell_driver_data {
 	/* For LCD related */
 	int enable;
+	void (*blank_unblank)(void *drv_data);
 
 	/* For TSP related */
 	void *tsp_data;
@@ -26,10 +27,4 @@ struct incell_driver_data {
 };
 
 extern struct incell_driver_data incell_data;
-#if 0
-#include <ss_dsi_panel_common.h>
-
-/* Defined at kernel/drivers/video/msm/mdss/samsung/ss_dsi_panel_common.h*/
-extern int samsung_display_incell_power(struct incell_driver_data *info);
-#endif
 #endif

@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2016, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -110,12 +110,11 @@ struct mdss_prefill_data {
 	u32 post_scaler_pixels;
 	u32 pp_pixels;
 	u32 fbc_lines;
+	u32 ts_threshold;
+	u32 ts_end;
+	u32 ts_overhead;
+	struct mult_factor ts_rate;
 	struct simplified_prefill_factors prefill_factors;
-};
-
-struct mdss_mdp_ppb {
-	u32 ctl_off;
-	u32 cfg_off;
 };
 
 struct mdss_mdp_dsc {
@@ -161,6 +160,8 @@ enum mdss_hw_quirk {
 	MDSS_QUIRK_DMA_BI_DIR,
 	MDSS_QUIRK_FMT_PACK_PATTERN,
 	MDSS_QUIRK_NEED_SECURE_MAP,
+	MDSS_QUIRK_SRC_SPLIT_ALWAYS,
+	MDSS_QUIRK_HDR_SUPPORT_ENABLED,
 	MDSS_QUIRK_MAX,
 };
 
@@ -183,7 +184,19 @@ enum mdss_qos_settings {
 	MDSS_QOS_PER_PIPE_LUT,
 	MDSS_QOS_SIMPLIFIED_PREFILL,
 	MDSS_QOS_VBLANK_PANIC_CTRL,
+	MDSS_QOS_TS_PREFILL,
+	MDSS_QOS_REMAPPER,
+	MDSS_QOS_IB_NOCR,
 	MDSS_QOS_MAX,
+};
+
+enum mdss_mdp_pipe_type {
+	MDSS_MDP_PIPE_TYPE_INVALID = -1,
+	MDSS_MDP_PIPE_TYPE_VIG = 0,
+	MDSS_MDP_PIPE_TYPE_RGB,
+	MDSS_MDP_PIPE_TYPE_DMA,
+	MDSS_MDP_PIPE_TYPE_CURSOR,
+	MDSS_MDP_PIPE_TYPE_MAX,
 };
 
 struct reg_bus_client {
@@ -200,6 +213,7 @@ struct mdss_smmu_client {
 	struct reg_bus_client *reg_bus_clt;
 	bool domain_attached;
 	bool handoff_pending;
+	char __iomem *mmu_base;
 };
 
 struct mdss_mdp_qseed3_lut_tbl {
@@ -218,6 +232,13 @@ struct mdss_scaler_block {
 	u32 *dest_scaler_off;
 	u32 *dest_scaler_lut_off;
 	struct mdss_mdp_qseed3_lut_tbl lut_tbl;
+
+	/*
+	 * Lock is mainly to serialize access to LUT.
+	 * LUT values come asynchronously from userspace
+	 * via ioctl.
+	 */
+	struct mutex scaler_lock;
 };
 
 struct mdss_data_type;
@@ -235,7 +256,7 @@ struct mdss_smmu_ops {
 	void (*smmu_unmap_dma_buf)(struct sg_table *table, int domain,
 			int dir, struct dma_buf *dma_buf);
 	int (*smmu_dma_alloc_coherent)(struct device *dev, size_t size,
-			dma_addr_t *phys, dma_addr_t *iova, void *cpu_addr,
+			dma_addr_t *phys, dma_addr_t *iova, void **cpu_addr,
 			gfp_t gfp, int domain);
 	void (*smmu_dma_free_coherent)(struct device *dev, size_t size,
 			void *cpu_addr, dma_addr_t phys, dma_addr_t iova,
@@ -251,6 +272,8 @@ struct mdss_smmu_ops {
 	void (*smmu_dsi_unmap_buffer)(dma_addr_t dma_addr, int domain,
 			unsigned long size, int dir);
 	void (*smmu_deinit)(struct mdss_data_type *mdata);
+	struct sg_table * (*smmu_sg_table_clone)(struct sg_table *orig_table,
+			gfp_t gfp_mask, bool padding);
 };
 
 struct mdss_data_type {
@@ -319,8 +342,9 @@ struct mdss_data_type {
 	u32 default_ot_wr_limit;
 
 	struct irq_domain *irq_domain;
-	u32 mdp_irq_mask;
+	u32 *mdp_irq_mask;
 	u32 mdp_hist_irq_mask;
+	u32 mdp_intf_irq_mask;
 
 	int suspend_fs_ena;
 	u8 clk_ena;
@@ -370,6 +394,8 @@ struct mdss_data_type {
 	u32 *vbif_rt_qos;
 	u32 *vbif_nrt_qos;
 	u32 npriority_lvl;
+	u32 rot_dwnscale_min;
+	u32 rot_dwnscale_max;
 
 	struct mult_factor ab_factor;
 	struct mult_factor ib_factor;
@@ -392,6 +418,7 @@ struct mdss_data_type {
 
 	struct mdss_hw_settings *hw_settings;
 
+	int rects_per_sspp[MDSS_MDP_PIPE_TYPE_MAX];
 	struct mdss_mdp_pipe *vig_pipes;
 	struct mdss_mdp_pipe *rgb_pipes;
 	struct mdss_mdp_pipe *dma_pipes;
@@ -403,8 +430,10 @@ struct mdss_data_type {
 	u8  ncursor_pipes;
 	u32 max_cursor_size;
 
-	u32 nppb;
-	struct mdss_mdp_ppb *ppb;
+	u32 nppb_ctl;
+	u32 *ppb_ctl;
+	u32 nppb_cfg;
+	u32 *ppb_cfg;
 	char __iomem *slave_pingpong_base;
 
 	struct mdss_mdp_mixer *mixer_intf;
@@ -488,6 +517,9 @@ struct mdss_data_type {
 	u32 bcolor1;
 	u32 bcolor2;
 	struct mdss_scaler_block *scaler_off;
+
+	u32 splash_intf_sel;
+	u32 splash_split_disp;
 };
 
 extern struct mdss_data_type *mdss_res;
@@ -573,6 +605,6 @@ static inline bool mdss_has_quirk(struct mdss_data_type *mdata,
 
 #if defined(CONFIG_FB_MSM_MDSS_SAMSUNG)
 extern void mdss_dump_reg(const char *dump_name, u32 reg_dump_flag,
-		char *addr, int len, u32 **dump_mem);
+		char *addr, int len, u32 **dump_mem, bool from_isr);
 #endif
 #endif /* MDSS_H */

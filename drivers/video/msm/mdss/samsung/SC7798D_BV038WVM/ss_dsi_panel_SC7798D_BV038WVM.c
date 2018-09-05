@@ -103,142 +103,168 @@ static int mdss_panel_revision(struct mdss_dsi_ctrl_pdata *ctrl)
 	return true;
 }
 
+#define reg_outdoor 237
+#define reg_max 186
+#define reg_default 77 /*170cd*/
+#define reg_min 4
+
+#define bl_outdoor 324
+#define bl_max 255
+#define bl_default 127
+#define bl_min 1
+
 static struct dsi_panel_cmds * mdss_brightness_tft_pwm(struct mdss_dsi_ctrl_pdata *ctrl, int *level_key)
 {
 	struct samsung_display_driver_data *vdd = check_valid_ctrl(ctrl);
+	int reg_value;
 
 	if (IS_ERR_OR_NULL(vdd)) {
 		pr_err("%s: Invalid data ctrl : 0x%zx vdd : 0x%zx", __func__, (size_t)ctrl, (size_t)vdd);
 		return NULL;
 	}
 
-	vdd->dtsi_data[ctrl->ndx].tft_pwm_tx_cmds[vdd->panel_revision].cmds[0].payload[1] = vdd->bl_level;
+	if (vdd->bl_level > bl_max)
+		reg_value = (vdd->bl_level - bl_max)*(reg_outdoor-reg_max)/(bl_outdoor- bl_max) + reg_max;
+	else if (vdd->bl_level >= bl_default)
+		reg_value = (vdd->bl_level - bl_default)*(reg_max-reg_default)/(bl_max- bl_default) + reg_default;
+	else if (vdd->bl_level >= bl_min)
+		reg_value = (vdd->bl_level - bl_min)*(reg_default-reg_min)/(bl_default- bl_min) + reg_min;
+	else reg_value = 0;
+
+	vdd->dtsi_data[ctrl->ndx].tft_pwm_tx_cmds[vdd->panel_revision].cmds[0].payload[1] = reg_value;
+	vdd->candela_level = reg_value;/*pwm level: regitster value*/
+
+	/* MDNIE Outdoor Mode Setting :temp. solution for tft project without light sensor,
+	*  In the case of no light sensor, pms should ? be set lux as over 0 value.
+	*  This will be removed once PMS set specific lux on lux node for common way.
+	*/
+	if (vdd->bl_level > bl_max){
+		if (vdd->lux!= ENTER_HBM_LUX){
+			vdd->lux = ENTER_HBM_LUX;
+			update_mdnie_tft_cmds(ctrl);
+			pr_info("%s : MDNIE Outdoor Mode : %d\n", __func__, vdd->lux);
+		}
+	}else{
+		if(vdd->lux!= 0) {
+			vdd->lux = 0;
+			update_mdnie_tft_cmds(ctrl);
+			pr_info("%s : MDNIE Outdoor Mode : %d\n", __func__, vdd->lux);
+		}
+	}
 
 	*level_key = PANEL_LEVE1_KEY;
 
 	return &vdd->dtsi_data[ctrl->ndx].tft_pwm_tx_cmds[vdd->panel_revision];
 }
 
-static void mdss_panel_tft_outdoormode_update(struct mdss_dsi_ctrl_pdata *ctrl)
+static void mdnie_init(struct samsung_display_driver_data *vdd)
 {
-	struct samsung_display_driver_data *vdd = check_valid_ctrl(ctrl);
-	struct mdss_panel_data *pdata;
-	struct mdnie_lite_tun_type *mdnie_tune_state;
-
-	if (IS_ERR_OR_NULL(vdd)) {
-		pr_err("%s: Invalid data ctrl : 0x%zx vdd : 0x%zx", __func__, (size_t)ctrl, (size_t)vdd);
+	mdnie_data = kzalloc(sizeof(struct mdnie_lite_tune_data), GFP_KERNEL);
+	if (!mdnie_data) {
+		LCD_ERR("fail to alloc mdnie_data..\n");
 		return;
 	}
-	pr_info("%s: tft panel outdoor_mode update\n", __func__);
 
-	/* MDNIE Outdoor Mode Setting*/
-	list_for_each_entry_reverse(mdnie_tune_state, &mdnie_list , used_list) {
-		if (vdd->auto_brightness == 6)
-			mdnie_tune_state->outdoor = OUTDOOR_ON_MODE;
-		else
-			mdnie_tune_state->outdoor = OUTDOOR_OFF_MODE;
+	vdd->mdnie_tune_size1 = 113;
+	vdd->mdnie_tune_size2 = 0;
+	vdd->mdnie_reverse_scr = true;
 
-		pr_info("%s : MDNIE Outdoor Mode : %d\n", __func__, mdnie_tune_state->outdoor);
+	if (mdnie_data) {
+		/* Update mdnie command */
+		mdnie_data[0].COLOR_BLIND_MDNIE_2 = NULL;
+		mdnie_data[0].RGB_SENSOR_MDNIE_1 = NULL;
+		mdnie_data[0].RGB_SENSOR_MDNIE_2 = NULL;
+		mdnie_data[0].UI_DYNAMIC_MDNIE_2 = NULL;
+		mdnie_data[0].UI_STANDARD_MDNIE_2 = NULL;
+		mdnie_data[0].UI_AUTO_MDNIE_2 = NULL;
+		mdnie_data[0].VIDEO_DYNAMIC_MDNIE_2 = NULL;
+		mdnie_data[0].VIDEO_STANDARD_MDNIE_2 = NULL;
+		mdnie_data[0].VIDEO_AUTO_MDNIE_2 = NULL;
+		mdnie_data[0].CAMERA_MDNIE_2 = NULL;
+		mdnie_data[0].CAMERA_AUTO_MDNIE_2 = NULL;
+		mdnie_data[0].GALLERY_DYNAMIC_MDNIE_2 = NULL;
+		mdnie_data[0].GALLERY_STANDARD_MDNIE_2 = NULL;
+		mdnie_data[0].GALLERY_AUTO_MDNIE_2 = NULL;
+		mdnie_data[0].VT_DYNAMIC_MDNIE_2 = NULL;
+		mdnie_data[0].VT_STANDARD_MDNIE_2 = NULL;
+		mdnie_data[0].VT_AUTO_MDNIE_2 = NULL;
+		mdnie_data[0].BROWSER_DYNAMIC_MDNIE_2 = NULL;
+		mdnie_data[0].BROWSER_STANDARD_MDNIE_2 = NULL;
+		mdnie_data[0].BROWSER_AUTO_MDNIE_2 = NULL;
+		mdnie_data[0].EBOOK_DYNAMIC_MDNIE_2 = NULL;
+		mdnie_data[0].EBOOK_STANDARD_MDNIE_2 = NULL;
+		mdnie_data[0].EBOOK_AUTO_MDNIE_2 = NULL;
+
+		mdnie_data[0].BYPASS_MDNIE = DSI0_BYPASS_MDNIE;
+		mdnie_data[0].NEGATIVE_MDNIE = DSI0_NEGATIVE_MDNIE;
+		mdnie_data[0].GRAYSCALE_MDNIE = DSI0_GRAYSCALE_MDNIE;
+		mdnie_data[0].GRAYSCALE_NEGATIVE_MDNIE = DSI0_GRAYSCALE_NEGATIVE_MDNIE;
+		mdnie_data[0].COLOR_BLIND_MDNIE = DSI0_COLOR_BLIND_MDNIE;
+		mdnie_data[0].HBM_CE_MDNIE = DSI0_OUTDOOR_MDNIE;
+		mdnie_data[0].RGB_SENSOR_MDNIE = NULL;
+		mdnie_data[0].CURTAIN = NULL;
+		mdnie_data[0].UI_DYNAMIC_MDNIE = DSI0_UI_MDNIE;
+		mdnie_data[0].UI_STANDARD_MDNIE = DSI0_UI_MDNIE;
+		mdnie_data[0].UI_NATURAL_MDNIE = DSI0_UI_MDNIE;
+		mdnie_data[0].UI_MOVIE_MDNIE = DSI0_UI_MDNIE;
+		mdnie_data[0].UI_AUTO_MDNIE = DSI0_UI_MDNIE;
+		mdnie_data[0].VIDEO_OUTDOOR_MDNIE = NULL;
+		mdnie_data[0].VIDEO_DYNAMIC_MDNIE = DSI0_VIDEO_MDNIE;
+		mdnie_data[0].VIDEO_STANDARD_MDNIE = DSI0_VIDEO_MDNIE;
+		mdnie_data[0].VIDEO_NATURAL_MDNIE = DSI0_VIDEO_MDNIE;
+		mdnie_data[0].VIDEO_MOVIE_MDNIE = DSI0_VIDEO_MDNIE;
+		mdnie_data[0].VIDEO_AUTO_MDNIE = DSI0_VIDEO_MDNIE;
+		mdnie_data[0].VIDEO_WARM_OUTDOOR_MDNIE = NULL;
+		mdnie_data[0].VIDEO_WARM_MDNIE = DSI0_VIDEO_WARM_MDNIE;
+		mdnie_data[0].VIDEO_COLD_OUTDOOR_MDNIE = NULL;
+		mdnie_data[0].VIDEO_COLD_MDNIE = DSI0_VIDEO_COLD_MDNIE;
+		mdnie_data[0].CAMERA_OUTDOOR_MDNIE = NULL;
+		mdnie_data[0].CAMERA_MDNIE = DSI0_CAMERA_MDNIE;
+		mdnie_data[0].CAMERA_AUTO_MDNIE = DSI0_CAMERA_MDNIE;
+		mdnie_data[0].GALLERY_DYNAMIC_MDNIE = DSI0_GALLERY_MDNIE;
+		mdnie_data[0].GALLERY_STANDARD_MDNIE = DSI0_GALLERY_MDNIE;
+		mdnie_data[0].GALLERY_NATURAL_MDNIE = DSI0_GALLERY_MDNIE;
+		mdnie_data[0].GALLERY_MOVIE_MDNIE = DSI0_GALLERY_MDNIE;
+		mdnie_data[0].GALLERY_AUTO_MDNIE = DSI0_GALLERY_MDNIE;
+		mdnie_data[0].VT_DYNAMIC_MDNIE = DSI0_VT_MDNIE;
+		mdnie_data[0].VT_STANDARD_MDNIE = DSI0_VT_MDNIE;
+		mdnie_data[0].VT_NATURAL_MDNIE = DSI0_VT_MDNIE;
+		mdnie_data[0].VT_MOVIE_MDNIE = DSI0_VT_MDNIE;
+		mdnie_data[0].VT_AUTO_MDNIE = DSI0_VT_MDNIE;
+		mdnie_data[0].BROWSER_DYNAMIC_MDNIE = DSI0_BROWSER_MDNIE;
+		mdnie_data[0].BROWSER_STANDARD_MDNIE = DSI0_BROWSER_MDNIE;
+		mdnie_data[0].BROWSER_NATURAL_MDNIE = DSI0_BROWSER_MDNIE;
+		mdnie_data[0].BROWSER_MOVIE_MDNIE = DSI0_BROWSER_MDNIE;
+		mdnie_data[0].BROWSER_AUTO_MDNIE = DSI0_BROWSER_MDNIE;
+		mdnie_data[0].EBOOK_DYNAMIC_MDNIE = DSI0_EBOOK_MDNIE;
+		mdnie_data[0].EBOOK_STANDARD_MDNIE = DSI0_EBOOK_MDNIE;
+		mdnie_data[0].EBOOK_NATURAL_MDNIE = DSI0_EBOOK_MDNIE;
+		mdnie_data[0].EBOOK_MOVIE_MDNIE = DSI0_EBOOK_MDNIE;
+		mdnie_data[0].EBOOK_AUTO_MDNIE = DSI0_EBOOK_MDNIE;
+		mdnie_data[0].EMAIL_AUTO_MDNIE = DSI0_EMAIL_MDNIE;
+		mdnie_data[0].mdnie_tune_value = mdnie_tune_value_dsi0;
+		mdnie_data[0].COLOR_BLIND_MDNIE_SCR = DSI0_COLOR_BLIND_MDNIE_CMDS;
+		mdnie_data[0].light_notification_tune_value = light_notification_tune_value;
+	/*	mdnie_data[0].RGB_SENSOR_MDNIE_SCR = DSI0_RGB_SENSOR_MDNIE_2;*/
+
+		/* Update MDNIE data related with size, offset or index */
+		mdnie_data[0].bypass_mdnie_size = ARRAY_SIZE(DSI0_BYPASS_MDNIE);
+		mdnie_data[0].mdnie_color_blinde_cmd_offset = MDNIE_COLOR_BLINDE_CMD_OFFSET;
+		mdnie_data[0].mdnie_step_index[MDNIE_STEP1] = MDNIE_STEP1_INDEX;
+		mdnie_data[0].mdnie_step_index[MDNIE_STEP2] = MDNIE_STEP2_INDEX;
+		mdnie_data[0].address_scr_white[ADDRESS_SCR_WHITE_RED_OFFSET] = 0;
+		mdnie_data[0].address_scr_white[ADDRESS_SCR_WHITE_GREEN_OFFSET] = 0;
+		mdnie_data[0].address_scr_white[ADDRESS_SCR_WHITE_BLUE_OFFSET] = 0;
+		mdnie_data[0].rgb_sensor_mdnie_1_size = 0;
+		mdnie_data[0].rgb_sensor_mdnie_2_size = 0;
+		mdnie_data[0].scr_step_index = MDNIE_STEP2_INDEX;
+		mdnie_data[0].white_default_r = 0xff;
+		mdnie_data[0].white_default_g = 0xff;
+		mdnie_data[0].white_default_b = 0xff;
+		mdnie_data[0].white_balanced_r = 0;
+		mdnie_data[0].white_balanced_g = 0;
+		mdnie_data[0].white_balanced_b = 0;
 	}
-
-	pdata = &vdd->ctrl_dsi[DISPLAY_1]->panel_data;
-
-	/* Update Panel Brightness */
-	mutex_lock(&vdd->mfd_dsi[DISPLAY_1]->bl_lock);
-	pdata->set_backlight(pdata, vdd->bl_level);
-	mutex_unlock(&vdd->mfd_dsi[DISPLAY_1]->bl_lock);
-}
-
-static void dsi_update_mdnie_data(void)
-{
-	/* Update mdnie command */
-	mdnie_data.DSI0_COLOR_BLIND_MDNIE_2 = DSI0_COLOR_ADJUSTMENT_MDNIE_CMDS;
-	mdnie_data.DSI0_RGB_SENSOR_MDNIE_1 = NULL;
-	mdnie_data.DSI0_RGB_SENSOR_MDNIE_2 = NULL;
-	mdnie_data.DSI0_UI_DYNAMIC_MDNIE_2 = NULL;
-	mdnie_data.DSI0_UI_STANDARD_MDNIE_2 = NULL;
-	mdnie_data.DSI0_UI_AUTO_MDNIE_2 = NULL;
-	mdnie_data.DSI0_VIDEO_DYNAMIC_MDNIE_2 = NULL;
-	mdnie_data.DSI0_VIDEO_STANDARD_MDNIE_2 = NULL;
-	mdnie_data.DSI0_VIDEO_AUTO_MDNIE_2 = NULL;
-	mdnie_data.DSI0_CAMERA_MDNIE_2 = NULL;
-	mdnie_data.DSI0_CAMERA_AUTO_MDNIE_2 = NULL;
-	mdnie_data.DSI0_GALLERY_DYNAMIC_MDNIE_2 = NULL;
-	mdnie_data.DSI0_GALLERY_STANDARD_MDNIE_2 = NULL;
-	mdnie_data.DSI0_GALLERY_AUTO_MDNIE_2 = NULL;
-	mdnie_data.DSI0_VT_DYNAMIC_MDNIE_2 = NULL;
-	mdnie_data.DSI0_VT_STANDARD_MDNIE_2 = NULL;
-	mdnie_data.DSI0_VT_AUTO_MDNIE_2 = NULL;
-	mdnie_data.DSI0_BROWSER_DYNAMIC_MDNIE_2 = NULL;
-	mdnie_data.DSI0_BROWSER_STANDARD_MDNIE_2 = NULL;
-	mdnie_data.DSI0_BROWSER_AUTO_MDNIE_2 = NULL;
-	mdnie_data.DSI0_EBOOK_DYNAMIC_MDNIE_2 = NULL;
-	mdnie_data.DSI0_EBOOK_STANDARD_MDNIE_2 = NULL;
-	mdnie_data.DSI0_EBOOK_AUTO_MDNIE_2 = NULL;
-
-	mdnie_data.DSI0_BYPASS_MDNIE = DSI0_BYPASS_MDNIE;
-	mdnie_data.DSI0_NEGATIVE_MDNIE = DSI0_NEGATIVE_MDNIE;
-	mdnie_data.DSI0_GRAYSCALE_MDNIE = DSI0_GRAYSCALE_MDNIE;
-	mdnie_data.DSI0_GRAYSCALE_NEGATIVE_MDNIE = DSI0_GRAYSCALE_NEGATIVE_MDNIE;
-	mdnie_data.DSI0_COLOR_BLIND_MDNIE = DSI0_COLOR_ADJUSTMENT_MDNIE;
-	mdnie_data.DSI0_HBM_CE_MDNIE = DSI0_OUTDOOR_MDNIE;
-	mdnie_data.DSI0_RGB_SENSOR_MDNIE = NULL;
-	mdnie_data.DSI0_CURTAIN = NULL;
-	mdnie_data.DSI0_UI_DYNAMIC_MDNIE = DSI0_UI_MDNIE;
-	mdnie_data.DSI0_UI_STANDARD_MDNIE = DSI0_UI_MDNIE;
-	mdnie_data.DSI0_UI_NATURAL_MDNIE = DSI0_UI_MDNIE;
-	mdnie_data.DSI0_UI_MOVIE_MDNIE = DSI0_UI_MDNIE;
-	mdnie_data.DSI0_UI_AUTO_MDNIE = DSI0_UI_MDNIE;
-	mdnie_data.DSI0_VIDEO_OUTDOOR_MDNIE = NULL;
-	mdnie_data.DSI0_VIDEO_DYNAMIC_MDNIE = DSI0_VIDEO_MDNIE;
-	mdnie_data.DSI0_VIDEO_STANDARD_MDNIE = DSI0_VIDEO_MDNIE;
-	mdnie_data.DSI0_VIDEO_NATURAL_MDNIE = DSI0_VIDEO_MDNIE;
-	mdnie_data.DSI0_VIDEO_MOVIE_MDNIE = DSI0_VIDEO_MDNIE;
-	mdnie_data.DSI0_VIDEO_AUTO_MDNIE = DSI0_VIDEO_MDNIE;
-	mdnie_data.DSI0_VIDEO_WARM_OUTDOOR_MDNIE = NULL;
-	mdnie_data.DSI0_VIDEO_WARM_MDNIE = DSI0_VIDEO_WARM_MDNIE;
-	mdnie_data.DSI0_VIDEO_COLD_OUTDOOR_MDNIE = NULL;
-	mdnie_data.DSI0_VIDEO_COLD_MDNIE = DSI0_VIDEO_COLD_MDNIE;
-	mdnie_data.DSI0_CAMERA_OUTDOOR_MDNIE = NULL;
-	mdnie_data.DSI0_CAMERA_MDNIE = DSI0_CAMERA_MDNIE;
-	mdnie_data.DSI0_CAMERA_AUTO_MDNIE = DSI0_CAMERA_MDNIE;
-	mdnie_data.DSI0_GALLERY_DYNAMIC_MDNIE = DSI0_GALLERY_MDNIE;
-	mdnie_data.DSI0_GALLERY_STANDARD_MDNIE = DSI0_GALLERY_MDNIE;
-	mdnie_data.DSI0_GALLERY_NATURAL_MDNIE = DSI0_GALLERY_MDNIE;
-	mdnie_data.DSI0_GALLERY_MOVIE_MDNIE = DSI0_GALLERY_MDNIE;
-	mdnie_data.DSI0_GALLERY_AUTO_MDNIE = DSI0_GALLERY_MDNIE;
-	mdnie_data.DSI0_VT_DYNAMIC_MDNIE = DSI0_VT_MDNIE;
-	mdnie_data.DSI0_VT_STANDARD_MDNIE = DSI0_VT_MDNIE;
-	mdnie_data.DSI0_VT_NATURAL_MDNIE = DSI0_VT_MDNIE;
-	mdnie_data.DSI0_VT_MOVIE_MDNIE = DSI0_VT_MDNIE;
-	mdnie_data.DSI0_VT_AUTO_MDNIE = DSI0_VT_MDNIE;
-	mdnie_data.DSI0_BROWSER_DYNAMIC_MDNIE = DSI0_BROWSER_MDNIE;
-	mdnie_data.DSI0_BROWSER_STANDARD_MDNIE = DSI0_BROWSER_MDNIE;
-	mdnie_data.DSI0_BROWSER_NATURAL_MDNIE = DSI0_BROWSER_MDNIE;
-	mdnie_data.DSI0_BROWSER_MOVIE_MDNIE = DSI0_BROWSER_MDNIE;
-	mdnie_data.DSI0_BROWSER_AUTO_MDNIE = DSI0_BROWSER_MDNIE;
-	mdnie_data.DSI0_EBOOK_DYNAMIC_MDNIE = DSI0_EBOOK_MDNIE;
-	mdnie_data.DSI0_EBOOK_STANDARD_MDNIE = DSI0_EBOOK_MDNIE;
-	mdnie_data.DSI0_EBOOK_NATURAL_MDNIE = DSI0_EBOOK_MDNIE;
-	mdnie_data.DSI0_EBOOK_MOVIE_MDNIE = DSI0_EBOOK_MDNIE;
-	mdnie_data.DSI0_EBOOK_AUTO_MDNIE = DSI0_EBOOK_MDNIE;
-	mdnie_data.DSI0_EMAIL_AUTO_MDNIE = DSI0_EMAIL_MDNIE;
-	mdnie_data.mdnie_tune_value_dsi0 = mdnie_tune_value_dsi0;
-/*	mdnie_data.DSI0_COLOR_BLIND_MDNIE_SCR = DSI0_COLOR_BLIND_MDNIE_2;*/
-/*	mdnie_data.RGB_SENSOR_MDNIE_SCR = DSI0_RGB_SENSOR_MDNIE_2;*/
-
-	/* Update MDNIE data related with size, offset or index */
-	mdnie_data.dsi0_bypass_mdnie_size = ARRAY_SIZE(DSI0_BYPASS_MDNIE);
-	mdnie_data.mdnie_color_blinde_cmd_offset = MDNIE_COLOR_BLINDE_CMD_OFFSET;
-	mdnie_data.mdnie_step_index[MDNIE_STEP1] = MDNIE_STEP1_INDEX;
-	mdnie_data.mdnie_step_index[MDNIE_STEP2] = MDNIE_STEP2_INDEX;
-	mdnie_data.address_scr_white[ADDRESS_SCR_WHITE_RED_OFFSET] = 0;
-	mdnie_data.address_scr_white[ADDRESS_SCR_WHITE_GREEN_OFFSET] = 0;
-	mdnie_data.address_scr_white[ADDRESS_SCR_WHITE_BLUE_OFFSET] = 0;
-	mdnie_data.dsi0_rgb_sensor_mdnie_1_size = 0;
-	mdnie_data.dsi0_rgb_sensor_mdnie_2_size = 0;
-	mdnie_data.dsi0_scr_step_index = MDNIE_STEP2_INDEX;
-	mdnie_data.dsi1_scr_step_index = MDNIE_STEP2_INDEX;
 }
 
 static void backlight_tft_late_on(struct mdss_dsi_ctrl_pdata *ctrl)
@@ -249,7 +275,7 @@ static void backlight_tft_late_on(struct mdss_dsi_ctrl_pdata *ctrl)
 		pr_err("%s: Invalid data ctrl : 0x%zx vdd : 0x%zx", __func__, (size_t)ctrl, (size_t)vdd);
 		return;
 	}
-
+	update_mdnie_tft_cmds(ctrl);/*It dose not work updating mdnie in mdss_panel_on_post func.*/
 }
 
 static void mdss_panel_init(struct samsung_display_driver_data *vdd)
@@ -258,9 +284,6 @@ static void mdss_panel_init(struct samsung_display_driver_data *vdd)
 
 	vdd->support_panel_max = SC7798D_BV038WVM_SUPPORT_PANEL_COUNT;
 	vdd->support_cabc = true;
-	vdd->support_mdnie_lite = true;
-	vdd->mdnie_tune_size1 = 113;
-	vdd->mdnie_tune_size2 = 0;
 
 	/* ON/OFF */
 	vdd->panel_func.samsung_panel_on_pre = mdss_panel_on_pre;
@@ -290,10 +313,10 @@ static void mdss_panel_init(struct samsung_display_driver_data *vdd)
 	vdd->panel_func.samsung_brightness_vint = NULL;
 	vdd->panel_func.samsung_brightness_gamma = NULL;
 	vdd->brightness[0].brightness_packet_tx_cmds_dsi.link_state = DSI_HS_MODE;
-	vdd->panel_func.samsung_backlight_late_on = update_mdnie_tft_cmds;
-	vdd->mdss_panel_tft_outdoormode_update=mdss_panel_tft_outdoormode_update;
 
-	dsi_update_mdnie_data();
+	/* MDNIE */
+	vdd->panel_func.samsung_mdnie_init = mdnie_init;
+
 	mdss_panel_attach_set(vdd->ctrl_dsi[DISPLAY_1], true);
 }
 

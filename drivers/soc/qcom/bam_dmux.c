@@ -231,7 +231,7 @@ static struct srcu_struct bam_dmux_srcu;
 /* A2 power collaspe */
 #define UL_TIMEOUT_DELAY 1000	/* in ms */
 #define UL_FAST_TIMEOUT_DELAY 100 /* in ms */
-#define SHUTDOWN_TIMEOUT_MS	500
+#define SHUTDOWN_TIMEOUT_MS	2000
 #define UL_WAKEUP_TIMEOUT_MS	2000
 static uint32_t ul_timeout_delay = UL_TIMEOUT_DELAY;
 static void toggle_apps_ack(void);
@@ -2747,7 +2747,11 @@ static int bam_dmux_probe(struct platform_device *pdev)
 	 * block the watchdog pet function, so that netif_rx() in rmnet
 	 * only uses one queue.
 	 */
-	bam_mux_rx_workqueue = alloc_workqueue("bam_dmux_rx",
+	if (no_cpu_affinity)
+		bam_mux_rx_workqueue =
+			create_singlethread_workqueue("bam_dmux_rx");
+	else
+		bam_mux_rx_workqueue = alloc_workqueue("bam_dmux_rx",
 					WQ_MEM_RECLAIM | WQ_CPU_INTENSIVE, 1);
 	if (!bam_mux_rx_workqueue)
 		return -ENOMEM;

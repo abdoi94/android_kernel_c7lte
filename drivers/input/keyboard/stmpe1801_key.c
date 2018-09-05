@@ -23,12 +23,10 @@
 
 #include <linux/input/stmpe1801_key.h>
 
-/*extern */int expander_keystate;	//gpio_keys.c (key_pressed_show)
-
 #define DD_VER	"2.4"
 
 #define DBG_PRN	// define for debugging printk
-#define STMPE1801_TRIGGER_TYPE_FALLING // define for INT trigger
+//#define STMPE1801_TRIGGER_TYPE_FALLING // define for INT trigger
 #define STMPE1801_TMR_INTERVAL	10L
 
 #define SUPPORTED_KEYPAD_LED
@@ -107,6 +105,7 @@ struct stmpe1801_dev {
 	int					sda_gpio;
 	int					scl_gpio;
 	struct pinctrl				*pinctrl;
+	int					key_state[5];
 };
 
 struct stmpe1801_devicetree_data {
@@ -127,8 +126,6 @@ struct stmpe1801_devicetree_data {
 	struct regulator *vdd_vreg;
 	struct regulator *reset_vreg;
 };
-
-static unsigned char gExpanderKeyState = 0;
 
 static struct stmpe1801_dev *copy_device_data;
 
@@ -664,12 +661,18 @@ static void stmpe1801_dev_int_proc(struct stmpe1801_dev *stmpe1801)
 							if (col == STMPE1801_KPC_DATA_NOKEY)
 								continue;
 
-							gExpanderKeyState = !up; /* 1 : Release , 0 : Press */
-							expander_keystate = gExpanderKeyState;
-
+							if (up) {	/* Release */
+								stmpe1801->key_state[row] &= ~(1 << col);
+							} else {	/* Press */
+								stmpe1801->key_state[row] |= (1 << col);
+							}
+#if !defined(CONFIG_SAMSUNG_PRODUCT_SHIP)
 							input_info(true, &stmpe1801->client->dev, "%s code(0x%X|%d) R:C(%d:%d)\n",
-											!up ? "P" : "R", stmpe1801->keycode[code], stmpe1801->keycode[code], row, col);
-
+									!up ? "P" : "R", stmpe1801->keycode[code], stmpe1801->keycode[code], row, col);
+#else
+							input_info(true, &stmpe1801->client->dev, "%s (%d:%d)\n",
+									!up ? "P" : "R", row, col);
+#endif
 							input_event(stmpe1801->input_dev, EV_MSC, MSC_SCAN, code);
 							input_report_key(stmpe1801->input_dev, stmpe1801->keycode[code], !up);
 							input_sync(stmpe1801->input_dev);
@@ -876,7 +879,37 @@ static int stmpe1801_dev_regulator_on(struct device *dev,
 	return ret;
 }
 
+static ssize_t  sysfs_key_onoff_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct stmpe1801_dev *device_data = dev_get_drvdata(dev);
+	int state = 0;
+	int i;
+
+	for (i = 0; i < 5; i++) {
+		state |= device_data->key_state[i];
+	}
+
+	input_info(true, &device_data->client->dev,
+		"%s: key state:%d\n", __func__, !!state);
+
+	return snprintf(buf, 5, "%d\n", !!state);
+}
+
+static DEVICE_ATTR(sec_key_pressed, 0444 , sysfs_key_onoff_show, NULL);
+
 #ifdef SUPPORTED_KEYPAD_LED
+static ssize_t key_led_onoff_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct stmpe1801_dev *device_data = dev_get_drvdata(dev);
+	int state = gpio_get_value(device_data->dtdata->gpio_tkey_led_en);
+
+	input_info(true, dev, "%s: key_led_%s\n", __func__, state ? "on" : "off");
+
+	return snprintf(buf, 5, "%d\n", state);
+}
+
 static ssize_t key_led_onoff(struct device *dev,
 				 struct device_attribute *attr, const char *buf,
 				 size_t size)
@@ -886,28 +919,16 @@ static ssize_t key_led_onoff(struct device *dev,
 
 	sscanf(buf, "%d\n", &data);
 
-	if (data) {
-		gpio_direction_output(device_data->dtdata->gpio_tkey_led_en, 1);
-		input_err(true, dev, "[KEY] key_led_on\n");
-	} else {
-		gpio_direction_output(device_data->dtdata->gpio_tkey_led_en, 0);
-		input_err(true, dev, "[KEY] key_led_off\n");
-	}
+	gpio_direction_output(device_data->dtdata->gpio_tkey_led_en, !!data);
+	input_err(true, dev, "%s: key_led_%s: %s now\n", __func__,
+		(!!data) ? "on" : "off",
+		gpio_get_value(device_data->dtdata->gpio_tkey_led_en) ? "on" : "off");
 
 	return size;
 }
 
 static DEVICE_ATTR(brightness, S_IRUGO | S_IWUSR | S_IWGRP,
-		NULL, key_led_onoff);
-
-static struct attribute *key_attributes[] = {
-	&dev_attr_brightness.attr,
-	NULL,
-};
-
-static struct attribute_group key_attr_group = {
-	.attrs = key_attributes,
-};
+		key_led_onoff_show, key_led_onoff);
 #endif
 
 #ifdef SUPPORTED_GPIO_SYSFS
@@ -933,16 +954,22 @@ static ssize_t expander_gpio_control(struct device *dev,
 
 static DEVICE_ATTR(expander_gpio, S_IRUGO | S_IWUSR | S_IWGRP,
 		NULL, expander_gpio_control);
+#endif
 
-static struct attribute *gpio_attributes[] = {
+static struct attribute *key_attributes[] = {
+	&dev_attr_sec_key_pressed.attr,
+#ifdef SUPPORTED_KEYPAD_LED
+	&dev_attr_brightness.attr,
+#endif
+#ifdef SUPPORTED_GPIO_SYSFS
 	&dev_attr_expander_gpio.attr,
+#endif
 	NULL,
 };
 
-static struct attribute_group gpio_attr_group = {
-	.attrs = gpio_attributes,
+static struct attribute_group key_attr_group = {
+	.attrs = key_attributes,
 };
-#endif
 
 void stmpe1801_gpio_enable(bool en)
 {
@@ -1068,6 +1095,32 @@ int stmpe_request_irq(unsigned int irq, void (*stmpe_irq_func)(void *),
 }
 #endif
 
+static int stmpe1801_dev_pinctrl_configure(struct stmpe1801_dev *data, bool active)
+{
+	struct pinctrl_state *set_state;
+	int retval;
+
+	if (!data->pinctrl)
+		return -ENODEV;
+
+	input_info(true, &data->client->dev, "%s: %s\n", __func__, active ? "ACTIVE" : "SUSPEND");
+
+	set_state = pinctrl_lookup_state(data->pinctrl, active ? "active_state" : "suspend_state");
+	if (IS_ERR(set_state)) {
+		input_err(true, &data->client->dev, "%s: cannot get active state\n", __func__);
+		return -EINVAL;
+	}
+
+	retval = pinctrl_select_state(data->pinctrl, set_state);
+	if (retval) {
+		input_err(true, &data->client->dev, "%s: cannot set pinctrl %s state\n",
+				__func__, active ? "active" : "suspend");
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
 static int stmpe1801_dev_probe(struct i2c_client *client,
 				  const struct i2c_device_id *id)
 {
@@ -1088,6 +1141,8 @@ static int stmpe1801_dev_probe(struct i2c_client *client,
 		input_err(true, &client->dev, "Failed to allocate memory\n");
 		return -ENOMEM;
 	}
+
+	copy_device_data = device_data;
 
 	input_dev = input_allocate_device();
 	if (!input_dev) {
@@ -1144,24 +1199,22 @@ static int stmpe1801_dev_probe(struct i2c_client *client,
 		device_data->pinctrl = NULL;
 	}
 
+	stmpe1801_dev_pinctrl_configure(device_data, true);
 	stmpe1801_regs_init(device_data);
 
 
 	device_data->keycode_entries = __stmpe1801_get_keycode_entries(device_data,
 					((1 << device_data->dtdata->num_row) - 1),
 					((1 << device_data->dtdata->num_column) - 1));
-#ifdef DBG_PRN
 	input_info(true, &client->dev, "%s keycode entries (%d)\n",__func__, device_data->keycode_entries);
 	input_info(true, &client->dev, "%s keymap size (%d)\n",__func__, device_data->keymap_data->keymap_size);
-#endif
+
 	device_data->keycode = kzalloc(device_data->keycode_entries * sizeof(unsigned short), GFP_KERNEL);
 	if (device_data->keycode == NULL) {
 		input_err(true, &client->dev, "kzalloc memory error\n");
 		goto err_keycode;
 	}
-#ifdef DBG_PRN
 	input_info(true, &client->dev, "%s keycode addr (%p)\n", __func__, device_data->keycode);
-#endif
 
 	i2c_set_clientdata(client, device_data);
 
@@ -1215,9 +1268,8 @@ static int stmpe1801_dev_probe(struct i2c_client *client,
 // request irq
 	if (device_data->dtdata->gpio_int >= 0) {
 		device_data->dev_irq = gpio_to_irq(device_data->dtdata->gpio_int);
-#ifdef DBG_PRN
 		input_info(true, &client->dev, "%s INT mode (%d)\n", __func__, device_data->dev_irq);
-#endif
+
 		ret = request_threaded_irq(device_data->dev_irq, NULL, stmpe1801_dev_isr,
 #ifdef STMPE1801_TRIGGER_TYPE_FALLING
 			IRQF_TRIGGER_FALLING|IRQF_ONESHOT,
@@ -1233,9 +1285,8 @@ static int stmpe1801_dev_probe(struct i2c_client *client,
 		disable_irq_nosync(device_data->dev_irq);
 	}
 	else {
-#ifdef DBG_PRN
 		input_info(true, &client->dev, "%s poll mode\n", __func__);
-#endif
+
 		INIT_DELAYED_WORK(&device_data->worker, stmpe1801_dev_worker);
 		schedule_delayed_work(&device_data->worker, STMPE1801_TMR_INTERVAL);
 	}
@@ -1252,22 +1303,11 @@ static int stmpe1801_dev_probe(struct i2c_client *client,
 	device_data->sec_keypad = sec_device_create(13, device_data, "sec_keypad");
 	if (IS_ERR(device_data->sec_keypad))
 		input_err(true, &client->dev, "Failed to create sec_key device\n");
-#ifdef SUPPORTED_KEYPAD_LED
 	ret = sysfs_create_group(&device_data->sec_keypad->kobj, &key_attr_group);
 	if (ret) {
 		input_err(true, &client->dev, "Failed to create the test sysfs: %d\n",
 			ret);
 	}
-#endif
-#ifdef SUPPORTED_GPIO_SYSFS
-	ret = sysfs_create_group(&device_data->sec_keypad->kobj, &gpio_attr_group);
-	if (ret) {
-		input_err(true, &client->dev, "Failed to create the test sysfs: %d\n",
-			ret);
-	}
-#endif
-
-	copy_device_data = device_data;
 
 	// NOVEL gpio 5 set LOW for TDMB_FM_SEL
 	stmpe1801_gpio_enable(0);
@@ -1288,11 +1328,10 @@ err_config:
 	wake_lock_destroy(&device_data->stmpe_wake_lock);
 
 err_input_alloc:
+	copy_device_data = NULL;
 	kfree(device_data);
 
-#ifdef DBG_PRN
-	input_info(true, &client->dev, "Error at stmpe1801_dev_probe\n");
-#endif
+	input_err(true, &client->dev, "Error at stmpe1801_dev_probe\n");
 
 	return ret;
 }
@@ -1326,7 +1365,7 @@ static int stmpe1801_dev_suspend(struct device *dev)
 	struct stmpe1801_dev *device_data = dev_get_drvdata(dev);
 
 #ifdef DBG_PRN
-	input_info(true, &device_data->client->dev, "%s\n", __func__);
+	input_dbg(true, &device_data->client->dev, "%s\n", __func__);
 #endif
 
 	if (device_may_wakeup(dev)) {
@@ -1341,6 +1380,8 @@ static int stmpe1801_dev_suspend(struct device *dev)
 		mutex_unlock(&device_data->input_dev->mutex);
 	}
 
+	stmpe1801_dev_pinctrl_configure(device_data, false);
+
 	return 0;
 }
 
@@ -1350,7 +1391,7 @@ static int stmpe1801_dev_suspend_late(struct device *dev)
 	struct stmpe1801_dev *device_data = dev_get_drvdata(dev);
 
 #ifdef DBG_PRN
-	input_info(true, &device_data->client->dev, "%s\n", __func__);
+	input_dbg(true, &device_data->client->dev, "%s\n", __func__);
 #endif
 	device_data->dtdata->sleep_state = true;
 
@@ -1362,7 +1403,7 @@ static int stmpe1801_dev_resume_noirq(struct device *dev)
 	struct stmpe1801_dev *device_data = dev_get_drvdata(dev);
 
 #ifdef DBG_PRN
-	input_info(true, &device_data->client->dev, "%s\n", __func__);
+	input_dbg(true, &device_data->client->dev, "%s\n", __func__);
 #endif
 	device_data->dtdata->sleep_state = false;
 
@@ -1375,8 +1416,11 @@ static int stmpe1801_dev_resume(struct device *dev)
 	struct stmpe1801_dev *device_data = dev_get_drvdata(dev);
 
 #ifdef DBG_PRN
-	input_info(true, &device_data->client->dev, "%s\n", __func__);
+	input_dbg(true, &device_data->client->dev, "%s\n", __func__);
 #endif
+
+	stmpe1801_dev_pinctrl_configure(device_data, true);
+
 	device_data->dtdata->sleep_state = false;
 
 	if (device_may_wakeup(dev)) {

@@ -44,15 +44,22 @@
 #include "muic-internal.h"
 #include "muic_i2c.h"
 #include "muic_regmap.h"
+#include "muic_apis.h"
 
+#define ADC_DETECT_TIME_50MS (0x00)
 #define ADC_DETECT_TIME_200MS (0x03)
 #define KEY_PRESS_TIME_100MS  (0x00)
+#define LONGKEY_PRESS_TIME_400MS	(0x01)
+#define MUIC_INT2_STUCK_KEY_MASK	(1 << 3)
 
 enum sm5703_muic_reg_init_value {
 	REG_INTMASK1_VALUE	= (0xDC),
 	REG_INTMASK2_VALUE	= (0x00),
-	REG_TIMING1_VALUE	= (ADC_DETECT_TIME_200MS |
+	REG_INTMASK2_VBUS_VAL	= (0x81),
+	REG_TIMING1_VALUE	= (ADC_DETECT_TIME_50MS |
 				KEY_PRESS_TIME_100MS),
+	REG_TIMING2_VALUE	= (LONGKEY_PRESS_TIME_400MS),
+	REG_RSVDID2_VALUE	= (0x06),
 };
 
 /* sm5703 I2C registers */
@@ -112,6 +119,7 @@ enum sm5703_muic_reg_item {
 
 	INTMASK1_OVP_DIS_M   = REG_ITEM(REG_INTMASK1, _BIT7, _MASK1),
 	INTMASK1_OVP_EVENT_M = REG_ITEM(REG_INTMASK1, _BIT5, _MASK1),
+	INTMASK1_KEY_M		= REG_ITEM(REG_INTMASK1, _BIT2, _MASK3),
 	INTMASK1_LKR_M		= REG_ITEM(REG_INTMASK1, _BIT4, _MASK1),
 	INTMASK1_LKP_M		= REG_ITEM(REG_INTMASK1, _BIT3, _MASK1),
 	INTMASK1_KP_M		= REG_ITEM(REG_INTMASK1, _BIT2, _MASK1),
@@ -170,6 +178,7 @@ enum sm5703_muic_reg_item {
 	RSVDID1_VBUSIN_VALID  = REG_ITEM(REG_RSVDID1, _BIT1, _MASK1),
 	RSVDID1_VBUSOUT_VALID = REG_ITEM(REG_RSVDID1, _BIT0, _MASK1),
 	RSVDID2_DCD_TIME_EN   = REG_ITEM(REG_RSVDID2, _BIT2, _MASK1),
+	RSVDID2_VDP_SRC_EN    = REG_ITEM(REG_RSVDID2, _BIT5, _MASK1),
 	RSVDID3_BCD_RESCAN    = REG_ITEM(REG_RSVDID3, _BIT0, _MASK1),
 	CHGTYPE_CHG_TYPE      = REG_ITEM(REG_CHGTYPE, _BIT0, _MASK5),
 	RSVDID4_CHGPUMP_nEN   = REG_ITEM(REG_RSVDID4, _BIT0, _MASK1),
@@ -190,6 +199,23 @@ enum sm5703_muic_reg_item {
 #define CTRL_MASK		(CTRL_SWITCH_OPEN_MASK | CTRL_RAW_DATA_MASK | \
 				/*CTRL_MANUAL_SW_MASK |*/ CTRL_WAIT_MASK | \
 				CTRL_INT_MASK_MASK)
+
+#define MUIC_INT_LONG_KEY_RELEASE_MASK	(1 << 4)
+#define MUIC_INT_LONG_KEY_PRESS_MASK	(1 << 3)
+#define MUIC_INT_KEY_PRESS_MASK			(1 << 2)
+
+#define BUTTON1_SEND_END		((1 << 0) | (1 << 1))	// Send_end
+#define BUTTON2_BUTTON9			(1 << 1)	// Volume DOWN
+#define BUTTON2_BUTTON10		(1 << 2)	// Volume UP
+#define BUTTON2_ERR				(1 << 5)	// Key Press too short
+#define BUTTON2_8TO12			(0x1F)
+
+#define SM5703_CHG_TYPE_NC		0x00
+#define SM5703_CHG_TYPE_DCP		0x01
+#define SM5703_CHG_TYPE_CDP		0x02
+#define SM5703_CHG_TYPE_SDP		0x04
+#define SM5703_CHG_TYPE_TIMEOUT_SDP	0x08
+#define SM5703_CHG_TYPE_U200		0x10
 
 struct reg_value_set {
 	int value;
@@ -242,14 +268,18 @@ static int sm5703_com_value_tbl[] = {
 
 static regmap_t sm5703_muic_regmap_table[] = {
 	[REG_DEVID]	= {"DeviceID",	0x01, 0x00, INIT_NONE},
+#if defined(CONFIG_MUIC_SUPPORT_CCIC)
+	[REG_CTRL]	= {"CONTROL",		0x1F, 0x00, INIT_NONE,},
+#else
 	[REG_CTRL]	= {"CONTROL",		0x1F, 0x00, REG_CTRL_INITIAL,},
+#endif
 	[REG_INT1]	= {"INT1",		0x00, 0x00, INIT_NONE,},
 	[REG_INT2]	= {"INT2",		0x00, 0x00, INIT_NONE,},
 	[REG_INTMASK1]	= {"INTMASK1",	0x00, 0x00, REG_INTMASK1_VALUE,},
 	[REG_INTMASK2]	= {"INTMASK2",	0x00, 0x00, REG_INTMASK2_VALUE,},
 	[REG_ADC]	= {"ADC",		0x1F, 0x00, INIT_NONE,},
 	[REG_TIMING1]	= {"TimingSet1",	0x00, 0x00, REG_TIMING1_VALUE,},
-	[REG_TIMING2]	= {"TimingSet2",	0x00, 0x00, INIT_NONE,},
+	[REG_TIMING2]	= {"TimingSet2",	0x00, 0x00, REG_TIMING2_VALUE,},
 	[REG_DEVT1]	= {"DEVICETYPE1",	0xFF, 0x00, INIT_NONE,},
 	[REG_DEVT2]	= {"DEVICETYPE2",	0xFF, 0x00, INIT_NONE,},
 	[REG_BTN1]	= {"BUTTON1",		0xFF, 0x00, INIT_NONE,},
@@ -264,7 +294,7 @@ static regmap_t sm5703_muic_regmap_table[] = {
 	/* 0x1C: Reserved */
 	[REG_RSVDID1]	= {"Reserved_ID1",	0x00, 0x00, INIT_NONE,},
 	/* 0x1E ~ 0x1F: Reserved */
-	[REG_RSVDID2]	= {"Reserved_ID2",	0x04, 0x00, INIT_NONE,},
+	[REG_RSVDID2]	= {"Reserved_ID2",	0x04, 0x00, REG_RSVDID2_VALUE,},
 	[REG_RSVDID3]	= {"Reserved_ID3",	0x00, 0x00, INIT_NONE,},
 	/* 0x22: Reserved */
 	[REG_CHGTYPE]	= {"REG_CHG_TYPE",	0xFF, 0x00, INIT_NONE,},
@@ -334,6 +364,58 @@ static int sm5703_muic_ioctl(struct regmap_desc *pdesc,
 	return ret;
 }
 
+static int sm5703_run_chgdet(struct regmap_desc *pdesc, bool started)
+{
+	int attr, value, ret;
+
+	pr_info("%s: start. %s\n", __func__, started ? "enabled": "disabled");
+#if defined(CONFIG_SEC_FACTORY)
+	mdelay(300);
+#endif
+	attr = MANSW1_DM_CON_SW;
+	value = 0;
+	ret = regmap_write_value(pdesc, attr, value);
+	if (ret < 0)
+		pr_err("%s Reset reg write fail.\n", __func__);
+	else
+		_REGMAP_TRACE(pdesc, 'w', ret, attr, value);
+
+	pr_info("%s: reset [DP]\n", __func__);
+	attr = MANSW1_DP_CON_SW;
+	value = 0;
+	ret = regmap_write_value(pdesc, attr, value);
+	if (ret < 0)
+		pr_err("%s Reset reg write fail.\n", __func__);
+	else
+		_REGMAP_TRACE(pdesc, 'w', ret, attr, value);
+
+	pr_info("%s: reset [MannualSW]\n", __func__);
+	attr = CTRL_ManualSW;
+	value = 0;
+	ret = regmap_write_value(pdesc, attr, value);
+	if (ret < 0)
+		pr_err("%s Reset reg write fail.\n", __func__);
+	else
+		_REGMAP_TRACE(pdesc, 'w', ret, attr, value);
+
+	pr_info("%s: reset [RESET]\n", __func__);
+	attr = RESET_RESET;
+	value = started ? 1 : 0;
+	ret = regmap_write_value_ex(pdesc, attr, value);
+	if (ret < 0)
+		pr_err("%s Reset reg write fail.\n", __func__);
+	else
+		_REGMAP_TRACE(pdesc, 'w', ret, attr, value);
+
+	pr_info("%s: init all register\n", __func__);
+	muic_reg_init(pdesc->muic);
+
+	pr_info("%s: enable INT\n", __func__);
+	set_int_mask(pdesc->muic, 0);
+
+	return ret;
+}
+
 static int sm5703_attach_ta(struct regmap_desc *pdesc)
 {
 	int attr = 0, value = 0, ret = 0;
@@ -366,6 +448,16 @@ static int sm5703_attach_ta(struct regmap_desc *pdesc)
 		ret = regmap_write_value(pdesc, attr, value);
 		if (ret < 0) {
 			pr_err("%s REG_CTRL write fail.\n", __func__);
+			break;
+		}
+
+		_REGMAP_TRACE(pdesc, 'w', ret, attr, value);
+
+		attr = RSVDID2_VDP_SRC_EN;
+		value = 1; /* Enable DP=0.6V on DP_CON requested by VZW */
+		ret = regmap_write_value(pdesc, attr, value);
+		if (ret < 0) {
+			pr_err("%s REG_RSVDID2 write fail.\n", __func__);
 			break;
 		}
 
@@ -412,6 +504,15 @@ static int sm5703_detach_ta(struct regmap_desc *pdesc)
 
 		_REGMAP_TRACE(pdesc, 'w', ret, attr, value);
 
+		attr = RSVDID2_VDP_SRC_EN;
+		value = 0; /* Disable DP=0.6V on DP_CON requested by VZW */
+		ret = regmap_write_value(pdesc, attr, value);
+		if (ret < 0) {
+			pr_err("%s REG_RSVDID2 write fail.\n", __func__);
+			break;
+		}
+
+		_REGMAP_TRACE(pdesc, 'w', ret, attr, value);
 	} while (0);
 
 	return ret;
@@ -461,31 +562,36 @@ static int sm5703_get_vps_data(struct regmap_desc *pdesc, void *pbuf)
 	*(u8 *)&pvps->s.val1 = muic_i2c_read_byte(pmuic->i2c, REG_DEVT1);
 	*(u8 *)&pvps->s.val2 = muic_i2c_read_byte(pmuic->i2c, REG_DEVT2);
 	*(u8 *)&pvps->s.val3 = muic_i2c_read_byte(pmuic->i2c, REG_DEVT3);
+#if defined(CONFIG_SEC_DEBUG)
+	*(u8 *)&pvps->s.chgtyp = muic_i2c_read_byte(pmuic->i2c, REG_CHGTYPE);
+#endif
 
 	attr = RSVDID1_VBUSIN_VALID;
 	*(u8 *)&pvps->s.vbvolt = regmap_read_value(pdesc, attr);
-	pr_info("%s, vbus %d\n", __func__, pmuic->vps.s.vbvolt);
+/*	pr_info("%s, vbus %d\n", __func__, pmuic->vps.s.vbvolt);	*/
 
 	attr = ADC_ADC_VALUE;
 	*(u8 *)&pvps->s.adc = regmap_read_value(pdesc, attr);
-	pr_info("%s, adc %d\n", __func__, pmuic->vps.s.adc);
+/*	pr_info("%s, adc %d\n", __func__, pmuic->vps.s.adc);	*/
 
 	return 0;
 }
 
-static int sm5703_set_earjack(struct regmap_desc *pdesc, int op) {
+#if defined(CONFIG_MUIC_SUPPORT_EARJACK)
+static int sm5703_set_earjack_mode(struct regmap_desc *pdesc, int op) {
 	int attr = 0, value = 0, ret = 0;	
-	int tmp = 0;
+
 	do {
+		/* Periodic scan enabled for audio type accessory */
 		attr = MANSW2_SINGLE_MODE;
-		value = op ? 1 : 0;		/* Periodic scan enabled for audio type accessory */
+		value = op ? 1 : 0;
 		ret = regmap_write_value(pdesc, attr, value);
 		if (ret < 0) {
 			pr_err("%s REG_MANSW2 write fail.\n", __func__);
 			break;
 		}
 		_REGMAP_TRACE(pdesc, 'w', ret, attr, value);
-		tmp = regmap_read_value(pdesc, attr);
+
 		attr = CTRL_ManualSW;
 		value = op ? 0 : 1;
 		ret = regmap_write_value(pdesc, attr, value);
@@ -494,36 +600,196 @@ static int sm5703_set_earjack(struct regmap_desc *pdesc, int op) {
 			break;
 		}
 		_REGMAP_TRACE(pdesc, 'w', ret, attr, value);
-
-		attr = INTMASK1_KP_M;
-		value = op ? 0 : 1;
+		
+		/* enable key interrupt */
+		attr = INTMASK1_KEY_M;
+		value = op ? _MASK0 : _MASK3;
 		ret = regmap_write_value(pdesc, attr, value);
 		if (ret < 0) {
-			pr_err("%s INTMASK1_EARJACK write fail.\n", __func__);
-			break;
-		}
-		_REGMAP_TRACE(pdesc, 'w', ret, attr, value);
-
-		attr = INTMASK1_LKP_M;
-		value = op ? 0 : 1;
-		ret = regmap_write_value(pdesc, attr, value);
-		if (ret < 0) {
-			pr_err("%s INTMASK1_EARJACK write fail.\n", __func__);
-			break;
-		}
-		_REGMAP_TRACE(pdesc, 'w', ret, attr, value);
-
-		attr = INTMASK1_LKR_M;
-		value = op ? 0 : 1;
-		ret = regmap_write_value(pdesc, attr, value);
-		if (ret < 0) {
-			pr_err("%s INTMASK1_EARJACK write fail.\n", __func__);
+			pr_err("%s INTMASK1_KEY write fail.\n", __func__);
 			break;
 		}
 		_REGMAP_TRACE(pdesc, 'w', ret, attr, value);
 	} while (0);
-	return 0;
+
+	return (ret < 0 ? 0 : 1);
 }
+
+static int sm5703_set_earjack_state(struct regmap_desc *pdesc, int intr1, int intr2, int val1, int val2) {
+	muic_data_t *pmuic = pdesc->muic;
+	int ret = 1;
+
+	if (intr1 & MUIC_INT_KEY_PRESS_MASK) {
+		pr_info("%s: (KP) botton1=0x%x, button2=0x%x \n", __func__, val1, val2);
+
+		if (val1 & BUTTON1_SEND_END) {
+			pr_info("%s: Key Press(SEND_END)\n", __func__);
+			pmuic->earkey_state = EARJACK_PRESS_SEND_END;
+		}
+		else if (val2 & BUTTON2_BUTTON9) {
+			pr_info("%s: Key Press(VOLUME DOWN)\n", __func__);
+			pmuic->earkey_state = EARJACK_PRESS_VOL_DN;
+		}
+		else if (val2 & BUTTON2_BUTTON10) {
+			pr_info("%s: Key Press(VOLUME UP)\n", __func__);
+			pmuic->earkey_state = EARJACK_PRESS_VOL_UP;
+		}
+		else if (val2 & BUTTON2_ERR) {
+			pr_info("%s: Key Press Error DETECTED\n", __func__);
+			pmuic->earkey_state = EARJACK_KEY_ERROR;
+		}
+		else {
+			pr_info("%s: Undefined case\n", __func__);
+			ret = 0;
+		}
+	}
+	else if (intr1 & MUIC_INT_LONG_KEY_PRESS_MASK) {	// LONG KEY
+		pr_info("%s:(LKP) botton1=0x%x, button2=0x%x \n", __func__, val1, val2);
+
+		if (val1 & BUTTON1_SEND_END) {
+			pr_info("%s: Long Key Press(SEND_END)\n", __func__);
+			pmuic->earkey_state = EARJACK_LONG_PRESS_SEND;
+		}
+		else if (val2 & BUTTON2_BUTTON9) {
+			pr_info("%s: Long Key Press(VOLUME DOWN)\n", __func__);
+			pmuic->earkey_state = EARJACK_LONG_PRESS_VOL_DN;
+		}
+		else if (val2 & BUTTON2_BUTTON10) {
+			pr_info("%s: Long Key Press(VOLUME UP)\n", __func__);
+			pmuic->earkey_state = EARJACK_LONG_PRESS_VOL_UP;
+		}
+		else if (val2 & BUTTON2_ERR) {
+			pr_info("%s: Long Key Press Error DETECTED\n", __func__);
+			pmuic->earkey_state = EARJACK_KEY_ERROR;
+		}
+		else {
+			pr_info("%s: Undefined case\n", __func__);
+			ret = 0;
+		}
+	}
+	else if (intr1 & MUIC_INT_LONG_KEY_RELEASE_MASK) {
+		pr_info("%s:(LKR) botton1=0x%x, button2=0x%x \n", __func__, val1, val2);
+
+		if (val1 & BUTTON1_SEND_END) {
+			pr_info("%s: Long Key Release(SEND_END)\n", __func__);
+			pmuic->earkey_state = EARJACK_LONG_RELEASE_SEND;
+		}
+		else if (val2 & BUTTON2_BUTTON9) {
+			pr_info("%s: Long Key Release(VOLUME DOWN)\n", __func__);
+			pmuic->earkey_state = EARJACK_LONG_RELEASE_VOL_DN;
+		}
+		else if (val2 & BUTTON2_BUTTON10) {
+			pr_info("%s: Long Key Release(VOLUME UP)\n", __func__);
+			pmuic->earkey_state = EARJACK_LONG_RELEASE_VOL_UP;
+		}
+		else if (val2 & BUTTON2_ERR) {
+			pr_info("%s: Long Key Release Error DETECTED\n", __func__);
+			pmuic->earkey_state = EARJACK_KEY_ERROR;
+		}
+		else {
+			pr_info("%s: Undefined case\n", __func__);
+			ret = 0;
+		}
+	}
+	else if (intr2 & MUIC_INT2_STUCK_KEY_MASK) {
+		pr_info("%s: (STUCK) botton1=0x%x, button2=0x%x \n", __func__, val1, val2);
+		/*
+		 * when "stuck key interrupt" is occured, It already skipped setting earjack mode().
+		 * so, it need to set Periodic Mode to detect buttons.
+		 */
+		if (val1 || (val2 & BUTTON2_8TO12)) {
+			pr_info("%s: STUCK -> set Periodic mode\n", __func__);
+			set_earjack_mode(pmuic, 1);
+		}
+		else if (val2 & BUTTON2_ERR) {
+			pr_info("%s: Key Press Error DETECTED\n", __func__);
+			pmuic->earkey_state = EARJACK_KEY_ERROR;
+		}
+		else {
+			pr_info("%s: Undefined case\n", __func__);
+			ret = 0;
+		}
+	}
+	else {
+		/*
+		 * On charging test, "STUCK_KEY_RCV_M interrupt" didn't occured.
+		 * Setting Periodic Mode should be skipped for "STUCK_KEY_RCV_M".
+		 */
+		if (val1 & BUTTON1_SEND_END || val2 & BUTTON2_BUTTON10 || val2 & BUTTON2_BUTTON9)
+			pmuic->earkey_state = EARJACK_STUCK_KEY;
+		else
+			pmuic->earkey_state = EARJACK_NO_KEY;
+		ret = 0;
+	}
+
+	return ret;
+}
+
+static int sm5703_attached_earjack_type(struct regmap_desc *pdesc) {
+	muic_data_t *pmuic = pdesc->muic;
+	int new_dev = ATTACHED_DEV_EARJACK_MUIC;
+
+	switch (pmuic->earkey_state) {
+		case EARJACK_PRESS_SEND_END:
+			pr_info("%s : EARJACK SEND_END Kye DETECTED\n", MUIC_DEV_NAME);
+			new_dev = ATTACHED_DEV_SEND_MUIC; 
+			break;
+		case EARJACK_PRESS_VOL_UP:
+			pr_info("%s : EARJACK VOLUME UP Kye DETECTED\n", MUIC_DEV_NAME);
+			new_dev = ATTACHED_DEV_VOLUP_MUIC; 
+			break;
+		case EARJACK_PRESS_VOL_DN:
+			pr_info("%s : EARJACK VOLUME DOWN Kye DETECTED\n", MUIC_DEV_NAME);
+			new_dev = ATTACHED_DEV_VOLDN_MUIC;
+			break;
+	/* long press */
+		case EARJACK_LONG_PRESS_SEND:
+			pr_info("%s : EARJACK LONG PRESS SEND END DETECTED\n", MUIC_DEV_NAME);
+			new_dev = ATTACHED_DEV_LP_SEND_MUIC;
+			break;
+		case EARJACK_LONG_PRESS_VOL_UP:
+			pr_info("%s : EARJACK LONG PRESS VOL UP DETECTED\n", MUIC_DEV_NAME);
+			new_dev = ATTACHED_DEV_LP_VOLUP_MUIC;
+			break;
+		case EARJACK_LONG_PRESS_VOL_DN:
+			pr_info("%s : EARJACK LONG PRESS VOL DOWN DETECTED\n", MUIC_DEV_NAME);
+			new_dev = ATTACHED_DEV_LP_VOLDN_MUIC;
+			break;
+	/* long release */
+		case EARJACK_LONG_RELEASE_SEND:
+			pr_info("%s : EARJACK LONG RELEASE SEND END DETECTED\n", MUIC_DEV_NAME);
+			new_dev = ATTACHED_DEV_LR_SEND_MUIC;
+			break;
+		case EARJACK_LONG_RELEASE_VOL_UP:
+			pr_info("%s : EARJACK LONG RELEASE VOL UP DETECTED\n", MUIC_DEV_NAME);
+			new_dev = ATTACHED_DEV_LR_VOLUP_MUIC;
+			break;
+		case EARJACK_LONG_RELEASE_VOL_DN:
+			pr_info("%s : EARJACK LONG RELEASE VOL DN DETECTED\n", MUIC_DEV_NAME);
+			new_dev = ATTACHED_DEV_LR_VOLDN_MUIC;
+			break;
+	/* too short key press */
+		case EARJACK_KEY_ERROR:
+			pr_info("%s : EARJACK Kye Error DETECTED\n", MUIC_DEV_NAME);
+			new_dev = ATTACHED_ERROR_EARJACK_MUIC;
+			break;
+	/* Earjack STUCK KEY interrupt */
+		case EARJACK_STUCK_KEY:
+			pr_info("%s : STUCK KEY DETECTED\n", MUIC_DEV_NAME);
+			new_dev = ATTACHED_STUCK_EARJACK_MUIC;
+			break;
+	/* connecting earjack */
+		case EARJACK_NO_KEY:
+			pr_info("%s : ADC_EARJACK DETECTED\n", MUIC_DEV_NAME);
+			new_dev = ATTACHED_DEV_EARJACK_MUIC;
+			break;
+		default:
+			pr_info("%s : Not Defined Key Type!\n", MUIC_DEV_NAME);
+			break;
+	};
+	return new_dev;				
+}
+#endif
 /*
 static int sm5703_muic_enable_accdet(struct regmap_desc *pdesc)
 {
@@ -636,6 +902,85 @@ static void sm5703_set_switching_mode(struct regmap_desc *pdesc, int mode)
 		_REGMAP_TRACE(pdesc, 'w', ret, attr, value);
 }
 
+static int sm5703_reset_vbus_path(struct regmap_desc *pdesc)
+{
+        int attr, value, intmask2_val;
+	int ret = 0;
+
+	pr_info("%s\n",__func__);
+
+	intmask2_val = muic_i2c_read_byte(pdesc->muic->i2c, REG_INTMASK2);
+
+	/* disable vbus interrupt */
+	value = intmask2_val | REG_INTMASK2_VBUS_VAL;
+	attr = REG_INTMASK2 | _ATTR_OVERWRITE_M;
+	ret = regmap_write_value(pdesc, attr, value);
+	if (ret < 0) {
+		pr_err("%s REG_INTMASK2 write fail.\n", __func__);
+		goto out;
+	} else
+		_REGMAP_TRACE(pdesc, 'w', ret, attr, value);	
+
+	/* vbus open */
+	value = _V_OPEN;
+	attr = MANSW1_VBUS_SW;
+	ret = regmap_write_value(pdesc, attr, value);
+	if (ret < 0) {
+		pr_err("%s MANSW1_VBUS_SW write fail.\n", __func__);
+		goto out;
+	} else
+		_REGMAP_TRACE(pdesc, 'w', ret, attr, value);
+
+	/* vbus set */
+	value = _V_CHARGER;
+	attr = MANSW1_VBUS_SW;
+	ret = regmap_write_value(pdesc, attr, value);
+	if (ret < 0) {
+		pr_err("%s MANSW1_VBUS_SW write fail.\n", __func__);
+		goto out;
+	} else
+		_REGMAP_TRACE(pdesc, 'w', ret, attr, value);
+
+	/* need to add delay for checking vbus interrupt and clear vbus interrupt */
+	msleep(50);
+	value = muic_i2c_read_byte(pdesc->muic->i2c, REG_INT2);
+	pr_info("%s:%s intr2=0x%x\n", MUIC_DEV_NAME, __func__, value);
+
+	/* enable vbus interrupt */
+	value = intmask2_val;
+	attr = REG_INTMASK2 | _ATTR_OVERWRITE_M;
+	ret = regmap_write_value(pdesc, attr, value);
+	if (ret < 0) {
+		pr_err("%s REG_INTMASK2 write fail.\n", __func__);
+		goto out;
+	} else
+		_REGMAP_TRACE(pdesc, 'w', ret, attr, value);
+
+out:
+	return ret;
+}
+
+#define DCD_OUT_SDP	(1 << 2)
+
+static bool sm5703_get_dcdtmr_irq(struct regmap_desc *pdesc)
+{
+	muic_data_t *muic = pdesc->muic;
+	int ret;
+
+	ret = muic_i2c_read_byte(muic->i2c, REG_DEVT3);
+	if (ret < 0) {
+		pr_err("%s: failed to read REG_DEVT3\n", __func__);
+		return false;
+	}
+
+	pr_info("%s: REG_DEVT3: 0x%02x\n", __func__, ret);
+
+	if (ret & DCD_OUT_SDP)
+		return true;
+
+	return false;
+}
+
 static void sm5703_get_fromatted_dump(struct regmap_desc *pdesc, char *mesg)
 {
 	muic_data_t *muic = pdesc->muic;
@@ -663,8 +1008,74 @@ static void sm5703_get_fromatted_dump(struct regmap_desc *pdesc, char *mesg)
 	val = i2c_smbus_read_byte_data(muic->i2c, REG_DEVT3);
 	sprintf(mesg+strlen(mesg), "DT3:%x ", val);
 	val = i2c_smbus_read_byte_data(muic->i2c, REG_RSVDID1);
-	sprintf(mesg+strlen(mesg), "RS1:%x", val);
+	sprintf(mesg+strlen(mesg), "RS1:%x ", val);
+	val = i2c_smbus_read_byte_data(muic->i2c, REG_BTN1);
+	sprintf(mesg+strlen(mesg), "BT1:%x ", val);
+	val = i2c_smbus_read_byte_data(muic->i2c, REG_BTN2);
+	sprintf(mesg+strlen(mesg), "BT2:%x ", val);
 }
+
+#if defined(CONFIG_SEC_DEBUG)
+static int sm5703_usb_to_ta(struct regmap_desc *pdesc, int mode)
+{
+	int ret = 0;
+	muic_data_t *pmuic = pdesc->muic;
+	vps_data_t *pmsr = &pmuic->vps;
+
+	switch(mode) {
+	case USB2TA_DISABLE:
+		pr_info("%s, Disable USB to TA\n", __func__);
+		if (pmuic->attached_dev == ATTACHED_DEV_TA_MUIC && pmuic->usb_to_ta_state) {
+			switch (pmsr->s.chgtyp) {
+			case SM5703_CHG_TYPE_CDP:
+				pmuic->attached_dev = ATTACHED_DEV_CDP_MUIC;
+				break;
+			case SM5703_CHG_TYPE_SDP:
+				pmuic->attached_dev = ATTACHED_DEV_USB_MUIC;
+				break;
+			default:
+				pmuic->attached_dev = ATTACHED_DEV_USB_MUIC;
+				break;
+			}
+			muic_notifier_detach_attached_dev(ATTACHED_DEV_TA_MUIC);
+			muic_notifier_attach_attached_dev(pmuic->attached_dev);
+			pmuic->usb_to_ta_state = false;
+		}
+		break;
+	case USB2TA_ENABLE:
+		pr_info("%s, Enable USB to TA attached_dev %d\n",
+				__func__, pdesc->muic->attached_dev);
+		if ((pdesc->muic->attached_dev == ATTACHED_DEV_CDP_MUIC ||
+				pdesc->muic->attached_dev == ATTACHED_DEV_USB_MUIC)
+				&& !pmuic->usb_to_ta_state) {
+			muic_notifier_detach_attached_dev(pdesc->muic->attached_dev);
+			muic_notifier_attach_attached_dev(ATTACHED_DEV_TA_MUIC);
+			pmuic->attached_dev = ATTACHED_DEV_TA_MUIC;
+			pmuic->usb_to_ta_state = true;
+		}
+		break;
+	case USB2TA_READ:
+		pr_info("%s, USB to TA %s\n", __func__,
+				pmuic->usb_to_ta_state ? "Enabled" : "Disabled");
+		ret = pmuic->usb_to_ta_state;
+		break;
+	default:
+		pr_err("%s, Unknown CMD\n", __func__);
+		ret = -EINVAL;
+	}
+
+	return ret;
+}
+#endif
+
+#ifdef CONFIG_MUIC_SM570X_SWITCH_CONTROL_GPIO
+static int sm570x_prepare_switch(muic_data_t *pmuic, int port)
+{
+	pr_info("%s: port = %d\n", __func__, port);
+
+	return 0;
+}
+#endif
 
 static int sm5703_get_sizeof_regmap(void)
 {
@@ -687,7 +1098,20 @@ static struct vendor_ops sm5703_muic_vendor_ops = {
 	.get_adc_scan_mode = sm5703_get_adc_scan_mode,
 	.set_rustproof = sm5703_set_rustproof,
 	.get_vps_data = sm5703_get_vps_data,
-	.set_earjack = sm5703_set_earjack,
+#ifdef CONFIG_MUIC_SM570X_SWITCH_CONTROL_GPIO	
+	.prepare_switch = sm570x_prepare_switch,
+#endif
+#if defined(CONFIG_MUIC_SUPPORT_EARJACK)
+	.set_earjack_mode = sm5703_set_earjack_mode,
+	.set_earjack_state = sm5703_set_earjack_state,
+	.attached_earjack_type = sm5703_attached_earjack_type,
+#endif
+#if defined(CONFIG_SEC_DEBUG)
+	.usb_to_ta = sm5703_usb_to_ta,
+#endif
+	.reset_vbus_path = sm5703_reset_vbus_path,
+	.run_chgdet = sm5703_run_chgdet,
+	.get_dcdtmr_irq = sm5703_get_dcdtmr_irq,
 };
 
 static struct regmap_desc sm5703_muic_regmap_desc = {

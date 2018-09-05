@@ -119,6 +119,65 @@ i2c_read_error:
 	return -1;
 }
 
+int regmap_write_value_ex(struct regmap_desc *pdesc, int uattr, int value)
+{
+	struct i2c_client *i2c = pdesc->muic->i2c;
+	struct reg_attr attr;
+	int curr, result = 0;
+	u8 reg_val;
+
+	_REG_ATTR(&attr, uattr);
+
+	if (pdesc->trace)
+		pr_info("%s %s[%02x]:%02x<<%d, %02x\n", __func__,
+			regmap_to_name(pdesc, attr.addr),
+			attr.addr, attr.mask, attr.bitn, value);
+
+	curr = muic_i2c_read_byte(i2c, attr.addr);
+	if (curr < 0)
+		goto i2c_read_error;
+
+	if (uattr & _ATTR_OVERWRITE_M)
+		reg_val = value;
+	else {
+		reg_val  = curr & ~(attr.mask << attr.bitn);
+		reg_val	|= ((value & attr.mask) << attr.bitn);
+	}
+
+	if (reg_val ^ curr) {
+		if (muic_i2c_write_byte(i2c, attr.addr, reg_val) < 0)
+			goto i2c_write_error;
+
+		result = muic_i2c_read_byte(i2c, attr.addr);
+		if (result < 0)
+			goto i2c_read_error;
+
+		if (pdesc->trace)
+			pr_info("  -%s done %02x+%02x->%02x(=%02x)\n",
+				(uattr & _ATTR_OVERWRITE_M) ?
+				"Overwrite" : "Update",
+				curr, value, reg_val, result);
+	} else {
+		result = reg_val;
+
+		if (pdesc->trace)
+			pr_info("  -%s skip %02x+%02x->%02x(=%02x)\n",
+				(uattr & _ATTR_OVERWRITE_M) ?
+				"Overwrite" : "Update",
+				curr, value, reg_val, result);
+	}
+
+	return result | ((curr << 8) & 0xff00);
+
+i2c_write_error:
+	pr_err("%s i2c write error.\n", __func__);
+	return -1;
+
+i2c_read_error:
+	pr_err("%s i2c read error.\n", __func__);
+	return -1;
+}
+
 /* read a shifed masked value */
 int regmap_read_value(struct regmap_desc *pdesc, int uattr)
 {
@@ -159,20 +218,35 @@ int regmap_read_raw_value(struct regmap_desc *pdesc, int uattr)
 	return curr;
 }
 
-int regmap_com_to(struct regmap_desc *pdesc, int port)
+int regmap_com_to(muic_data_t *pmuic, int port)
 {
+	struct regmap_desc *pdesc = pmuic->regmapdesc;
 	struct regmap_ops *pops = pdesc->regmapops;
+	struct vendor_ops *vpops = pdesc->vendorops;
 	int uattr, ret;
+	int new_port;
 
+	pr_info("%s new port: %d\n", __func__, port);
+	new_port = port;
 	ret = pops->ioctl(pdesc, GET_COM_VAL, &port, &uattr);
 	if (ret < 0) {
 		pr_info("[muic] %s autoconfig mode\n", __func__);
 		ret = 0;
 	} else {
+		if (vpops->prepare_switch) {
+			pr_info("%s, prepare_switch\n", __func__);
+			vpops->prepare_switch(pmuic, new_port);
+		}
+
 		uattr |= _ATTR_OVERWRITE_M;
 		ret = regmap_write_value(pdesc, uattr, port);
 
 		_REGMAP_TRACE(pdesc, 'w', ret, uattr, port);
+
+#if (defined(CONFIG_MUIC_UNIVERSAL_SM5705) || defined(CONFIG_MUIC_UNIVERSAL_SM5708) || defined(CONFIG_MUIC_UNIVERSAL_SM5703)) && defined(CONFIG_MUIC_SUPPORT_CCIC)
+		if (vpops->set_switch)
+			vpops->set_switch(pmuic->regmapdesc, SWMODE_MANUAL);
+#endif
 	}
 
 	return ret;
@@ -270,11 +344,19 @@ static int muic_update_regmapdata(struct regmap_desc *pdesc, int size)
 	pr_info("%s REG_END:%d size:%d\n", __func__, pdesc->size, size);
 
 	for (i = 0; i < pdesc->size; i++, preg++) {
+#ifndef CONFIG_MUIC_UNIVERSAL_MULTI_SUPPORT 
 		if (!preg->name
-#ifdef CONFIG_MUIC_UNIVERSAL_SM5705
+#if (defined(CONFIG_MUIC_UNIVERSAL_SM5705) || defined(CONFIG_MUIC_UNIVERSAL_SM5708))
 				|| !strcmp(preg->name,"INT1") //Do not read int reg because of AFC_ATTACH int.
 				|| !strcmp(preg->name,"INT2")
 				|| !strcmp(preg->name,"INT3_AFC")
+#endif
+#else
+	if (pmuic->is_afc_support == true)
+		if (!preg->name || !strcmp(preg->name,"INT1") //Do not read int reg because of AFC_ATTACH int.
+				|| !strcmp(preg->name,"INT2")
+				|| !strcmp(preg->name,"INT3_AFC")
+			
 #endif
 				) {
 			pr_info("pass init register : %s\n", preg->name);
@@ -346,6 +428,10 @@ extern void muic_register_sm5703_regmap_desc(struct regmap_desc **pdesc);
 extern void muic_register_sm5705_regmap_desc(struct regmap_desc **pdesc);
 #endif
 
+#if defined(CONFIG_MUIC_UNIVERSAL_SM5708)
+extern void muic_register_sm5708_regmap_desc(struct regmap_desc **pdesc);
+#endif
+
 #if defined(CONFIG_MUIC_UNIVERSAL_S2MM001)
 extern void muic_register_s2mm001_regmap_desc(struct regmap_desc **pdesc);
 #endif
@@ -354,6 +440,7 @@ extern void muic_register_s2mm001_regmap_desc(struct regmap_desc **pdesc);
 extern void muic_register_max77849_regmap_desc(struct regmap_desc **pdesc);
 #endif
 
+#ifndef CONFIG_MUIC_UNIVERSAL_MULTI_SUPPORT
 static struct vendor_regmap vendor_regmap_tbl[] = {
 #if defined(CONFIG_MUIC_UNIVERSAL_SM5504)
 	{"sm,sm5504", muic_register_sm5504_regmap_desc},
@@ -364,6 +451,9 @@ static struct vendor_regmap vendor_regmap_tbl[] = {
 #if defined(CONFIG_MUIC_UNIVERSAL_SM5705)
 	{"sm,sm5705", muic_register_sm5705_regmap_desc},
 #endif
+#if defined(CONFIG_MUIC_UNIVERSAL_SM5708)
+	{"sm,sm5708", muic_register_sm5708_regmap_desc},
+#endif
 #if defined(CONFIG_MUIC_UNIVERSAL_S2MM001)
 	{"lsi,s2mm001", muic_register_s2mm001_regmap_desc},
 #endif
@@ -372,13 +462,43 @@ static struct vendor_regmap vendor_regmap_tbl[] = {
 #endif
 	{"", NULL},
 };
+
+#else
+static struct vendor_regmap sm5703_vendor_regmap_tbl[] = {
+	{"sm,sm5703", muic_register_sm5703_regmap_desc},
+	{"", NULL},
+};
+static struct vendor_regmap sm5705_vendor_regmap_tbl[] = {
+	{"sm,sm5705", muic_register_sm5705_regmap_desc},
+	{"", NULL},
+};
+#endif
+	
 void muic_register_regmap(struct regmap_desc **pdesc, void *pdata)
 {
 	struct regmap_desc *pdesc_temp = NULL;
 	struct regmap_ops *pops;
-	struct vendor_regmap *pvtbl = vendor_regmap_tbl;
+	struct vendor_regmap *pvtbl;
 	muic_data_t *pmuic = (muic_data_t *)pdata;
-	int i;
+	int i = 0;
+#ifndef CONFIG_MUIC_UNIVERSAL_MULTI_SUPPORT
+	pvtbl = vendor_regmap_tbl;
+    if (i == sizeof(vendor_regmap_tbl)/sizeof(struct vendor_regmap)) {
+        pr_info("%s: No matched regmap driver.\n", __func__);
+    }
+
+#else
+     if (pmuic->is_afc_support == true) {
+        pvtbl = sm5705_vendor_regmap_tbl;
+        if (i == sizeof(sm5705_vendor_regmap_tbl)/sizeof(struct vendor_regmap))
+            pr_info("%s: No matched regmap driver.\n", __func__);
+	    }
+	 else {
+	    pvtbl = sm5703_vendor_regmap_tbl;
+        if (i == sizeof(sm5703_vendor_regmap_tbl)/sizeof(struct vendor_regmap))    
+            pr_info("%s: No matched regmap driver.\n", __func__);
+        }
+#endif
 
 	/* Get a chipset descriptor */
 	pr_info("chip_name : %s\n",pmuic->chip_name);
@@ -388,9 +508,6 @@ void muic_register_regmap(struct regmap_desc **pdesc, void *pdata)
 			pvtbl->func(&pdesc_temp);
 			break;
 		}
-	}
-	if (i == sizeof(vendor_regmap_tbl)/sizeof(struct vendor_regmap)) {
-		pr_info("%s: No matched regmap driver.\n", __func__);
 	}
 
 	pr_info("%s: %s registered.\n", __func__, pdesc_temp->name);

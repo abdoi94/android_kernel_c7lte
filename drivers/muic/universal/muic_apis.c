@@ -56,7 +56,8 @@ int attach_ta(muic_data_t *pmuic)
 	if (pvendor->attach_ta) {
 		pr_info("%s: ", __func__);
 		pvendor->attach_ta(pmuic->regmapdesc);
-	} else
+	} 
+	else
 		pr_info("%s: No Vendor API ready.\n", __func__);
 
 	return 0;
@@ -69,7 +70,8 @@ int detach_ta(muic_data_t *pmuic)
 	if (pvendor->detach_ta) {
 		pr_info("%s: ", __func__);
 		pvendor->detach_ta(pmuic->regmapdesc);
-	} else
+	} 
+	else
 		pr_info("%s: No Vendor API ready.\n", __func__);
 
 	return 0;
@@ -166,9 +168,10 @@ int get_switch_mode(muic_data_t *pmuic)
 	int val=0;
 
 	if (pvendor->get_switch) {
-		pr_info("%s: ", __func__);
+		pr_info("%s: \n", __func__);
 		val = pvendor->get_switch(pmuic->regmapdesc);
-	} else{
+	}
+	else {
 		pr_info("%s: No Vendor API ready.\n", __func__);
 		val = -1;
 	}
@@ -180,26 +183,63 @@ void set_switch_mode(muic_data_t *pmuic, int mode)
 	struct vendor_ops *pvendor = pmuic->regmapdesc->vendorops;
 
 	if (pvendor->set_switch) {
-		pr_info("%s: ", __func__);
 		pvendor->set_switch(pmuic->regmapdesc,mode);
-	} else{
+		pr_info("%s: done\n", __func__);
+	} 
+	else
 		pr_info("%s: No Vendor API ready.\n", __func__);
-	}
+
 	return;
 }
 
+#if defined(CONFIG_MUIC_SUPPORT_EARJACK)
 void set_earjack_mode(muic_data_t *pmuic, int mode)
 {
 	struct vendor_ops *pvendor = pmuic->regmapdesc->vendorops;
+	int ret = 0;
 
-	if (pvendor->set_earjack) {
-		pr_info("%s: ", __func__);
-		pvendor->set_earjack(pmuic->regmapdesc,mode);
-	} else{
+	if (pvendor->set_earjack_mode) {
+		ret = pvendor->set_earjack_mode(pmuic->regmapdesc,mode);
+		if (ret) 
+			pr_info("%s: done\n", __func__);
+	} 
+	else
 		pr_info("%s: No Vendor API ready.\n", __func__);
-	}
+
 	return;
 }
+
+void set_earjack_state(muic_data_t *pmuic, int intr1, int intr2, int btn1, int btn2)
+{
+	struct vendor_ops *pvendor = pmuic->regmapdesc->vendorops;
+	int ret = 0;
+
+	if (pvendor->set_earjack_state) {
+		ret = pvendor->set_earjack_state(pmuic->regmapdesc, intr1, intr2, btn1, btn2);
+		if (ret) 
+			pr_info("%s: done\n", __func__);
+	}
+	else
+		pr_info("%s: No Vendor API ready.\n", __func__);
+
+	return;
+}
+
+int get_attached_earjack_type(muic_data_t *pmuic)
+{
+	struct vendor_ops *pvendor = pmuic->regmapdesc->vendorops;
+	int ret = 0;
+
+	if (pvendor->attached_earjack_type) {
+		pr_info("%s: ", __func__);
+		ret = pvendor->attached_earjack_type(pmuic->regmapdesc);
+	} else {
+		pr_info("%s: No Vendor API ready.\n", __func__);
+		ret = ATTACHED_DEV_NONE_MUIC;
+	}
+	return ret;
+}
+#endif
 
 int get_adc_scan_mode(muic_data_t *pmuic)
 {
@@ -236,7 +276,7 @@ int com_to_open(muic_data_t *pmuic)
 {
 	int ret = 0;
 
-	ret = regmap_com_to(pmuic->regmapdesc, COM_OPEN);
+	ret = regmap_com_to(pmuic, COM_OPEN);
 	if (ret < 0)
 		pr_err("%s:%s com_to_open err\n", MUIC_DEV_NAME, __func__);
 
@@ -248,7 +288,7 @@ int com_to_open_with_vbus(muic_data_t *pmuic)
 	int ret = 0;
 
 	pr_info("%s:%s\n", MUIC_DEV_NAME, __func__);
-	ret = regmap_com_to(pmuic->regmapdesc, COM_OPEN_WITH_V_BUS);
+	ret = regmap_com_to(pmuic, COM_OPEN_WITH_V_BUS);
 	if (ret < 0)
 		pr_err("%s:%s com_to_open err\n", MUIC_DEV_NAME, __func__);
 
@@ -260,7 +300,7 @@ int com_to_usb_ap(muic_data_t *pmuic)
 	int ret = 0;
 
 	pr_info("%s:%s\n", MUIC_DEV_NAME, __func__);
-	ret = regmap_com_to(pmuic->regmapdesc, COM_USB_AP);
+	ret = regmap_com_to(pmuic, COM_USB_AP);
 	if (ret < 0)
 		pr_err("%s:%s set_com_usb err\n", MUIC_DEV_NAME, __func__);
 
@@ -272,12 +312,46 @@ int com_to_usb_cp(muic_data_t *pmuic)
 	int ret = 0;
 
 	pr_info("%s:%s\n", MUIC_DEV_NAME, __func__);
-	ret = regmap_com_to(pmuic->regmapdesc, COM_USB_CP);
+	ret = regmap_com_to(pmuic, COM_USB_CP);
 	if (ret < 0)
 		pr_err("%s:%s set_com_usb err\n", MUIC_DEV_NAME, __func__);
 
 	return ret;
 }
+
+#if defined(CONFIG_MUIC_UNIVERSAL_SM5705_AFC) && defined(CONFIG_MUIC_SUPPORT_CCIC)
+int cable_redetection(muic_data_t *pmuic)
+{
+	switch (do_BCD_rescan(pmuic)) {
+		case CHGTYPE_NONE:
+			pmuic->legacy_dev = ATTACHED_DEV_UNDEFINED_CHARGING_MUIC;
+			com_to_open_with_vbus(pmuic);
+			break;
+		case CHGTYPE_DCP:
+		case CHGTYPE_U200:
+		case CHGTYPE_LO_TA:
+			pmuic->legacy_dev = ATTACHED_DEV_TA_MUIC;
+			com_to_open_with_vbus(pmuic);
+			break;
+		case CHGTYPE_CDP:
+			pmuic->legacy_dev = ATTACHED_DEV_CDP_MUIC;
+			break;
+		case CHGTYPE_SDP:
+			pmuic->legacy_dev = ATTACHED_DEV_USB_MUIC;
+			break;
+		case CHGTYPE_TIMEOUT_SDP:
+			pmuic->legacy_dev = ATTACHED_DEV_TIMEOUT_OPEN_MUIC;
+			break;
+		default:
+			pr_info("%s: Unsupported Chger Type\n", __func__);
+		return 0;
+		}
+
+	muic_notifier_attach_attached_dev(pmuic->legacy_dev);
+	
+	return 0;
+}
+#endif
 
 static int set_rustproof_mode(struct regmap_desc *pdesc, int op)
 {
@@ -288,6 +362,7 @@ static int set_rustproof_mode(struct regmap_desc *pdesc, int op)
 		pvendor->set_rustproof(pdesc, op);
 	} else
 		pr_err("%s: No Vendor API ready.\n", __func__);
+
 	return 0;
 }
 
@@ -298,7 +373,7 @@ int com_to_uart_ap(muic_data_t *pmuic)
 	pr_info("%s:%s\n", MUIC_DEV_NAME, __func__);
 	com_index = pmuic->is_rustproof ? COM_OPEN_WITH_V_BUS : COM_UART_AP;
 
-	ret = regmap_com_to(pmuic->regmapdesc, com_index);
+	ret = regmap_com_to(pmuic, com_index);
 	if (ret < 0)
 		pr_err("%s:%s set_com_uart err\n", MUIC_DEV_NAME, __func__);
 
@@ -319,7 +394,7 @@ int com_to_uart_cp(muic_data_t *pmuic)
 	pr_info("%s:%s\n", MUIC_DEV_NAME, __func__);
 	com_index = pmuic->is_rustproof ? COM_OPEN_WITH_V_BUS : COM_UART_CP;
 
-	ret = regmap_com_to(pmuic->regmapdesc, com_index);
+	ret = regmap_com_to(pmuic, com_index);
 	if (ret < 0)
 		pr_err("%s:%s set_com_uart err\n", MUIC_DEV_NAME, __func__);
 
@@ -337,7 +412,7 @@ int com_to_audio(muic_data_t *pmuic)
 {
 	int ret = 0;
 
-	ret = regmap_com_to(pmuic->regmapdesc, COM_AUDIO);
+	ret = regmap_com_to(pmuic, COM_AUDIO);
 	if (ret < 0)
 		pr_err("%s:%s set_com_audio err\n", MUIC_DEV_NAME, __func__);
 
@@ -481,6 +556,10 @@ int detach_usb(muic_data_t *pmuic)
 		pr_err("%s:%s fail.(%d)\n", MUIC_DEV_NAME, __func__, ret);
 		return ret;
 	}
+
+#if defined(CONFIG_SEC_DEBUG)
+	pmuic->usb_to_ta_state = false;
+#endif
 	pmuic->attached_dev = ATTACHED_DEV_NONE_MUIC;
 
 	return ret;
@@ -620,7 +699,8 @@ int attach_earjack(muic_data_t *pmuic,
 {
 	int ret = 0;
 
-	pr_info("%s:%s\n", MUIC_DEV_NAME, __func__);
+	pr_info("%s:%s, attached = %d, new = %d\n", MUIC_DEV_NAME, __func__, pmuic->attached_dev, new_dev);
+
 	if (new_dev == ATTACHED_DEV_EARJACK_MUIC) {
 	/*	Earjack processing	*/
 		if (pmuic->is_earkeypressed) {
@@ -639,9 +719,23 @@ int attach_earjack(muic_data_t *pmuic,
 
 		ret = com_to_audio(pmuic);
 		pmuic->attached_dev = new_dev;
-
-		/* send event jack type to upper layer */
-	} else {
+	} 
+	else if (new_dev == ATTACHED_STUCK_EARJACK_MUIC) {
+		if (pmuic->is_earkeypressed) {
+			/* send event sendend key type to upper layer */
+			pmuic->is_earkeypressed = false;
+			input_event(pmuic->input, EV_KEY,
+					pmuic->old_keycode, pmuic->is_earkeypressed);
+			input_sync(pmuic->input);
+		}
+		if (pmuic->attached_dev == new_dev) {
+			pr_info("%s:%s duplicated(earjack)\n", MUIC_DEV_NAME, __func__);
+			return ret;
+		}
+		ret = com_to_audio(pmuic);
+		pmuic->attached_dev = ATTACHED_DEV_EARJACK_MUIC;	
+	}
+	else {
 	/*	Earkey processing	*/
 		int code = 0;
 		switch(new_dev) {
@@ -665,7 +759,77 @@ int attach_earjack(muic_data_t *pmuic,
 		/* send event sendend key type to upper layer */
 		input_event(pmuic->input, EV_KEY, code, pmuic->is_earkeypressed);
 		input_sync(pmuic->input);
+#if defined(CONFIG_MUIC_UNIVERSAL_SM5703)	
+		/* 
+		 * SM5703 : when short key pressed, interrupt is occured on release key.
+		 *			it needs to send release event immediately.
+		 */
+		input_event(pmuic->input, EV_KEY, code, 0);
+		input_sync(pmuic->input);
+#endif		
 	}
+	return 0;
+}
+
+int attach_long_earjackkey(muic_data_t *pmuic,
+			muic_attached_dev_t new_dev)
+{
+	int code = 0;
+	
+	pr_info("%d:%s, attached = %d, new = %d\n", pmuic->is_earkeypressed, __func__, pmuic->attached_dev, new_dev);
+
+	switch (new_dev) {
+		case ATTACHED_DEV_LP_SEND_MUIC:
+			code = KEY_MEDIA;
+			pmuic->old_keycode = code;
+			break;
+		case ATTACHED_DEV_LP_VOLDN_MUIC:
+			code = KEY_VOLUMEDOWN;
+			pmuic->old_keycode = code;
+			break;
+		case ATTACHED_DEV_LP_VOLUP_MUIC:
+			code = KEY_VOLUMEUP;
+			pmuic->old_keycode = code;
+			break;
+		default:
+			pr_warn("%s:%s unsupported dev=%dn",
+					MUIC_DEV_NAME, __func__, new_dev);
+			break;
+	}
+
+	input_event(pmuic->input, EV_KEY, code, pmuic->is_earkeypressed);
+	input_sync(pmuic->input);
+
+	return 0;
+}
+
+int detach_long_earjackkey(muic_data_t *pmuic,
+			muic_attached_dev_t new_dev)
+{
+	int code = 0;
+
+	pr_info("%d:%s, attached = %d, new = %d\n", pmuic->is_earkeypressed, __func__, pmuic->attached_dev, new_dev);
+
+	switch(new_dev) {
+		case ATTACHED_DEV_LR_SEND_MUIC:
+			code = KEY_MEDIA;
+			pmuic->old_keycode = code;
+			break;
+		case ATTACHED_DEV_LR_VOLDN_MUIC:
+			code = KEY_VOLUMEDOWN;
+			pmuic->old_keycode = code;
+			break;
+		case ATTACHED_DEV_LR_VOLUP_MUIC:
+			code = KEY_VOLUMEUP;
+			pmuic->old_keycode = code;
+			break;
+		default:
+			pr_warn("%s:%s unsupported dev=%dn",
+					MUIC_DEV_NAME, __func__, new_dev);
+			break;
+	}
+	input_event(pmuic->input, EV_KEY, code, pmuic->is_earkeypressed);
+	input_sync(pmuic->input);
 
 	return 0;
 }
@@ -824,7 +988,7 @@ int attach_jig_uart_boot_on(muic_data_t *pmuic, muic_attached_dev_t new_dev)
 	pr_info("%s:%s JIG UART BOOT-ON(0x%x)\n",
 			MUIC_DEV_NAME, __func__, new_dev);
 
-	ret = regmap_com_to(pmuic->regmapdesc, com_index);
+	ret = regmap_com_to(pmuic, com_index);
 	if (ret < 0)
 		pr_err("%s:%s set_com_uart err\n", MUIC_DEV_NAME, __func__);
 

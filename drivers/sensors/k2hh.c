@@ -27,9 +27,12 @@
 #include <linux/of_gpio.h>
 #include <linux/wakelock.h>
 #include <linux/regulator/consumer.h>
-
-
 #include <linux/sensor/sensors_core.h>
+
+#ifdef TAG
+#undef TAG
+#define TAG "[ACCEL]"
+#endif
 
 #define I2C_M_WR                      0 /* for i2c Write */
 #define I2c_M_RD                      1 /* for i2c Read */
@@ -48,15 +51,6 @@
 
 #define CHIP_ID_RETRIES               3
 #define ACCEL_LOG_TIME                15 /* 15 sec */
-
-#define K2HH_TOP_UPPER_RIGHT          0
-#define K2HH_TOP_LOWER_RIGHT          1
-#define K2HH_TOP_LOWER_LEFT           2
-#define K2HH_TOP_UPPER_LEFT           3
-#define K2HH_BOTTOM_UPPER_RIGHT       4
-#define K2HH_BOTTOM_LOWER_RIGHT       5
-#define K2HH_BOTTOM_LOWER_LEFT        6
-#define K2HH_BOTTOM_UPPER_LEFT        7
 
 #define K2HH_MODE_SUSPEND             0
 #define K2HH_MODE_NORMAL              1
@@ -89,7 +83,11 @@
 #define CTRL1_BDU_MASK                0x08
 
 /* CTRL2 */
-#define CTRL2_IG1_INT1                0x08
+#define CTRL2_DFC_MASK                0x60
+#define CTRL2_DFC_50                  0x00
+#define CTRL2_DFC_100                 0x20
+#define CTRL2_DFC_9                   0x40
+#define CTRL2_DFC_400                 0x60
 
 /* CTRL3 */
 #define CTRL3_IG1_INT1                0x08
@@ -132,6 +130,16 @@
 
 #define DYNAMIC_THRESHOLD             5000
 
+#define ENABLE_LPF_CUT_OFF_FREQ	      1
+#define ENABLE_LOG_ACCEL_MAX_OUT      1
+#if defined(ENABLE_LOG_ACCEL_MAX_OUT)
+#define ACCEL_MAX_OUTPUT              32760
+#endif
+
+#if defined(CONFIG_SAMSUNG_LPM_MODE)
+extern int poweroff_charging;
+#endif
+
 enum {
 	OFF = 0,
 	ON = 1
@@ -159,7 +167,7 @@ struct k2hh_p {
 	struct mutex mode_mutex;
 	struct hrtimer accel_timer;
 	struct workqueue_struct *accel_wq;
-	struct work_struct work;
+	struct work_struct work_accel;
 	struct regulator *reg_vio;
 #ifdef CONFIG_SENSORS_K2HH_VDD
 	struct regulator *reg_vdd;
@@ -171,8 +179,6 @@ struct k2hh_p {
 	int irq1;
 	int irq_state;
 	int acc_int1;
-	int sda_gpio;
-	int scl_gpio;
 	int time_count;
 
 	u8 odr;
@@ -185,19 +191,17 @@ struct k2hh_p {
 	u8 negate_x;
 	u8 negate_y;
 	u8 negate_z;
-	u64 old_timestamp;
 
-	const char *str_vdd;
-	const char *str_vio;
+	u64 old_timestamp;
 };
 
-#define ACC_ODR10		0x10	/*   10Hz output data rate */
-#define ACC_ODR50		0x20	/*   50Hz output data rate */
-#define ACC_ODR100		0x30	/*  100Hz output data rate */
-#define ACC_ODR200		0x40	/*  200Hz output data rate */
-#define ACC_ODR400		0x50	/*  400Hz output data rate */
-#define ACC_ODR800		0x60	/*  800Hz output data rate */
-#define ACC_ODR_MASK		0X70
+#define ACC_ODR10     0x10	/*   10Hz output data rate */
+#define ACC_ODR50     0x20	/*   50Hz output data rate */
+#define ACC_ODR100    0x30	/*  100Hz output data rate */
+#define ACC_ODR200    0x40	/*  200Hz output data rate */
+#define ACC_ODR400    0x50	/*  400Hz output data rate */
+#define ACC_ODR800    0x60	/*  800Hz output data rate */
+#define ACC_ODR_MASK  0X70
 
 struct k2hh_acc_odr {
 	unsigned int cutoff_ms;
@@ -240,7 +244,7 @@ static int k2hh_i2c_read(struct k2hh_p *data,
 	} while (retries++ < 2);
 
 	if (ret < 0) {
-		SENSOR_ERR(" i2c read error %d\n", ret);
+		SENSOR_ERR("i2c read error %d\n", ret);
 		return ret;
 	}
 
@@ -269,7 +273,7 @@ static int k2hh_i2c_write(struct k2hh_p *data,
 	} while (retries++ < 2);
 
 	if (ret < 0) {
-		SENSOR_ERR(" i2c write error %d\n", ret);
+		SENSOR_ERR("i2c write error %d\n", ret);
 		return ret;
 	}
 
@@ -282,8 +286,7 @@ static int k2hh_read_accel_xyz(struct k2hh_p *data, struct k2hh_v *acc)
 	struct k2hh_v rawdata;
 	unsigned char buf[READ_DATA_LENTH];
 
-	ret += k2hh_i2c_read(data, AXISDATA_REG, buf, READ_DATA_LENTH);
-
+	ret = k2hh_i2c_read(data, AXISDATA_REG, buf, READ_DATA_LENTH);
 	if (ret < 0)
 		goto exit;
 
@@ -291,12 +294,12 @@ static int k2hh_read_accel_xyz(struct k2hh_p *data, struct k2hh_v *acc)
 	rawdata.v[1] = ((s16) ((buf[3] << 8) | buf[2]));
 	rawdata.v[2] = ((s16) ((buf[5] << 8) | buf[4]));
 
-	acc->v[0] = ((data->negate_x) ? (-rawdata.v[data->axis_map_x])
-		   : (rawdata.v[data->axis_map_x]));
-	acc->v[1] = ((data->negate_y) ? (-rawdata.v[data->axis_map_y])
-		   : (rawdata.v[data->axis_map_y]));
-	acc->v[2] = ((data->negate_z) ? (-rawdata.v[data->axis_map_z])
-		   : (rawdata.v[data->axis_map_z]));
+	acc->v[0] = ((data->negate_x) ? (-rawdata.v[data->axis_map_x]) :
+		(rawdata.v[data->axis_map_x]));
+	acc->v[1] = ((data->negate_y) ? (-rawdata.v[data->axis_map_y]) :
+		(rawdata.v[data->axis_map_y]));
+	acc->v[2] = ((data->negate_z) ? (-rawdata.v[data->axis_map_z]) :
+		(rawdata.v[data->axis_map_z]));
 
 exit:
 	return ret;
@@ -360,6 +363,16 @@ static int k2hh_set_odr(struct k2hh_p *data)
 	data->odr = new_odr;
 
 	SENSOR_INFO("change odr %d\n", i);
+
+#if defined(ENABLE_LPF_CUT_OFF_FREQ)
+	/* To increase LPF cut-off frequency, ODR/DFC */
+	k2hh_i2c_read(data, CTRL2_REG, &buf, 1);
+
+	buf = (CTRL2_DFC_MASK & CTRL2_DFC_9) | ((~CTRL2_DFC_MASK) & buf);
+	k2hh_i2c_write(data, CTRL2_REG, buf);
+	SENSOR_INFO("ctrl2:%x\n", buf);
+#endif
+
 	return ret;
 }
 
@@ -410,8 +423,8 @@ static int k2hh_set_hr(struct k2hh_p *data, int set)
 #if defined(OUTPUT_ALWAYS_ANTI_ALIASED)
 		bw = K2HH_ACC_BW_SCALE_ODR_DISABLE;
 		k2hh_i2c_read(data, CTRL4_REG, &buf, 1);
-		buf = (K2HH_ACC_BW_SCALE_ODR_MASK & bw)
-			| ((~K2HH_ACC_BW_SCALE_ODR_MASK) & buf);
+		buf = (K2HH_ACC_BW_SCALE_ODR_MASK & bw) |
+			((~K2HH_ACC_BW_SCALE_ODR_MASK) & buf);
 		k2hh_i2c_write(data, CTRL4_REG, buf);
 #endif
 	}
@@ -419,7 +432,6 @@ static int k2hh_set_hr(struct k2hh_p *data, int set)
 	ret = k2hh_i2c_read(data, CTRL1_REG, &buf, 1);
 	buf = data->hr | ((~CTRL1_HR_MASK) & buf);
 	ret += k2hh_i2c_write(data, CTRL1_REG, buf);
-
 	ret += k2hh_i2c_read(data, CTRL1_REG, &buf, 1);
 	buf = ((K2HH_ACC_ODR_MASK & odr) | ((~K2HH_ACC_ODR_MASK) & buf));
 	ret += k2hh_i2c_write(data, CTRL1_REG, buf);
@@ -434,7 +446,7 @@ static void k2hh_set_enable(struct k2hh_p *data, int enable)
 		      HRTIMER_MODE_REL);
 	} else {
 		hrtimer_cancel(&data->accel_timer);
-		cancel_work_sync(&data->work);
+		cancel_work_sync(&data->work_accel);
 	}
 }
 
@@ -451,6 +463,7 @@ static int k2hh_set_mode(struct k2hh_p *data, unsigned char mode)
 		ret = k2hh_i2c_read(data, CTRL1_REG, &temp, 1);
 		buf = ((mask & data->odr) | ((~mask) & temp));
 		buf = data->hr | ((~CTRL1_HR_MASK) & buf);
+		buf = CTRL1_BDU_ENABLE | ((~CTRL1_BDU_MASK) & buf);
 		ret += k2hh_i2c_write(data, CTRL1_REG, buf);
 		break;
 	case K2HH_MODE_SUSPEND:
@@ -498,7 +511,7 @@ static int k2hh_open_calibration(struct k2hh_p *data)
 	ret = cal_filp->f_op->read(cal_filp, (char *)&data->caldata.v,
 		3 * sizeof(s16), &cal_filp->f_pos);
 	if (ret != 3 * sizeof(s16)) {
-		SENSOR_ERR("Can't read the cal data\n");
+		SENSOR_ERR("can't read the cal data\n");
 		ret = -EIO;
 	}
 
@@ -523,11 +536,11 @@ static int k2hh_do_calibrate(struct k2hh_p *data, int enable)
 	struct k2hh_v acc;
 	mm_segment_t old_fs;
 
-	if (enable) {
-		data->caldata.x = 0;
-		data->caldata.y = 0;
-		data->caldata.z = 0;
+	data->caldata.x = 0;
+	data->caldata.y = 0;
+	data->caldata.z = 0;
 
+	if (enable) {
 		if (atomic_read(&data->enable) == ON)
 			k2hh_set_enable(data, OFF);
 		else
@@ -556,10 +569,6 @@ static int k2hh_do_calibrate(struct k2hh_p *data, int enable)
 			data->caldata.z -= MAX_ACCEL_1G;
 		else if (data->caldata.z < 0)
 			data->caldata.z += MAX_ACCEL_1G;
-	} else {
-		data->caldata.x = 0;
-		data->caldata.y = 0;
-		data->caldata.z = 0;
 	}
 
 	SENSOR_INFO("do accel calibrate %d, %d, %d\n",
@@ -571,7 +580,7 @@ static int k2hh_do_calibrate(struct k2hh_p *data, int enable)
 	cal_filp = filp_open(CALIBRATION_FILE_PATH,
 			O_CREAT | O_TRUNC | O_WRONLY, 0660);
 	if (IS_ERR(cal_filp)) {
-		SENSOR_ERR(" Can't open calibration file\n");
+		SENSOR_ERR("can't open calibration file\n");
 		set_fs(old_fs);
 		ret = PTR_ERR(cal_filp);
 		return ret;
@@ -580,7 +589,7 @@ static int k2hh_do_calibrate(struct k2hh_p *data, int enable)
 	ret = cal_filp->f_op->write(cal_filp, (char *)&data->caldata.v,
 		3 * sizeof(s16), &cal_filp->f_pos);
 	if (ret != 3 * sizeof(s16)) {
-		SENSOR_ERR(" Can't write the caldata to file\n");
+		SENSOR_ERR("can't write the caldata to file\n");
 		ret = -EIO;
 	}
 
@@ -595,8 +604,8 @@ static enum hrtimer_restart k2hh_timer_func(struct hrtimer *timer)
 	struct k2hh_p *data = container_of(timer,
 					struct k2hh_p, accel_timer);
 
-	if (!work_pending(&data->work))
-		queue_work(data->accel_wq, &data->work);
+	if (!work_pending(&data->work_accel))
+		queue_work(data->accel_wq, &data->work_accel);
 
 	hrtimer_forward_now(&data->accel_timer, data->poll_delay);
 
@@ -605,17 +614,34 @@ static enum hrtimer_restart k2hh_timer_func(struct hrtimer *timer)
 
 static void k2hh_work_func(struct work_struct *work)
 {
-	int ret;
 	struct k2hh_v acc;
-	struct k2hh_p *data = container_of(work, struct k2hh_p, work);
+	struct k2hh_p *data = container_of(work, struct k2hh_p, work_accel);
 	struct timespec ts;
 	u64 timestamp_new;
 	u64 delay = ktime_to_ns(data->poll_delay);
 	int time_hi, time_lo;
+	int ret;
 
 	ret = k2hh_read_accel_xyz(data, &acc);
 	if (ret < 0)
 		goto exit;
+
+#if defined(ENABLE_LOG_ACCEL_MAX_OUT)
+	/* For debugging if happened exceptional situation */
+	if (acc.x > ACCEL_MAX_OUTPUT ||
+			acc.y > ACCEL_MAX_OUTPUT ||
+			acc.z > ACCEL_MAX_OUTPUT) {
+		unsigned char buf[4], status;
+
+		k2hh_i2c_read(data, CTRL1_REG, buf, 4);
+		k2hh_i2c_read(data, STATUS_REG, &status, 1);
+
+		SENSOR_INFO("MAX_OUTPUT x = %d, y = %d, z = %d\n",
+				acc.x, acc.y, acc.z);
+		SENSOR_INFO("CTRL(20h~23h) : %X, %X, %X, %X - STATUS(27h) : %X\n",
+				buf[0], buf[1], buf[2], buf[3], status);
+	}
+#endif
 
 	ts = ktime_to_timespec(ktime_get_boottime());
 	timestamp_new = ts.tv_sec * 1000000000ULL + ts.tv_nsec;
@@ -628,6 +654,7 @@ static void k2hh_work_func(struct work_struct *work)
 		&& (data->old_timestamp != 0)) {
 		u64 shift_timestamp = delay >> 1;
 		u64 timestamp = 0ULL;
+
 		for (timestamp = data->old_timestamp + delay; timestamp < timestamp_new - shift_timestamp; timestamp += delay) {
 			time_hi = (int)((timestamp & TIME_HI_MASK) >> TIME_HI_SHIFT);
 			time_lo = (int)(timestamp & TIME_LO_MASK);
@@ -639,15 +666,16 @@ static void k2hh_work_func(struct work_struct *work)
 			input_sync(data->input);
 		}
 	}
-
 	time_hi = (int)((timestamp_new & TIME_HI_MASK) >> TIME_HI_SHIFT);
 	time_lo = (int)(timestamp_new & TIME_LO_MASK);
+
 	input_report_rel(data->input, REL_X, data->accdata.x);
 	input_report_rel(data->input, REL_Y, data->accdata.y);
 	input_report_rel(data->input, REL_Z, data->accdata.z);
 	input_report_rel(data->input, REL_DIAL, time_hi);
 	input_report_rel(data->input, REL_MISC, time_lo);
 	input_sync(data->input);
+
 	data->old_timestamp = timestamp_new;
 
 exit:
@@ -678,20 +706,24 @@ static ssize_t k2hh_enable_store(struct device *dev,
 
 	ret = kstrtou8(buf, 2, &enable);
 	if (ret) {
-		SENSOR_ERR(" Invalid Argument\n");
+		SENSOR_ERR("Invalid Argument\n");
 		return ret;
 	}
 
-	SENSOR_INFO("new_value = %u\n", enable);
 	pre_enable = atomic_read(&data->enable);
+	SENSOR_INFO("pre_enable = %d, enable = %d\n", pre_enable, enable);
 
 	if (enable) {
 		if (pre_enable == OFF) {
 			data->old_timestamp = 0LL;
-			k2hh_open_calibration(data);
+
+			/* Access to calibration data in filesystem
+			 * only when there are no caldata */
+			if (data->caldata.x == 0 && data->caldata.y == 0
+					&& data->caldata.z == 0)
+				k2hh_open_calibration(data);
 			k2hh_set_range(data, K2HH_RANGE_4G);
 			k2hh_set_bw(data);
-
 			k2hh_set_mode(data, K2HH_MODE_NORMAL);
 			atomic_set(&data->enable, ON);
 			k2hh_set_enable(data, ON);
@@ -725,9 +757,10 @@ static ssize_t k2hh_delay_store(struct device *dev,
 
 	ret = kstrtoll(buf, 10, &delay);
 	if (ret) {
-		SENSOR_ERR(" Invalid Argument\n");
+		SENSOR_ERR("Invalid Argument\n");
 		return ret;
 	}
+
 	if (delay > K2HH_DEFAULT_DELAY)
 		delay = K2HH_DEFAULT_DELAY;
 	else if (delay < K2HH_MIN_DELAY)
@@ -780,29 +813,29 @@ static ssize_t k2hh_calibration_show(struct device *dev,
 
 	ret = k2hh_open_calibration(data);
 	if (ret < 0)
-		SENSOR_ERR(" calibration open failed(%d)\n", ret);
+		SENSOR_ERR("calibration open failed(%d)\n", ret);
 
 	SENSOR_INFO("cal data %d %d %d - ret : %d\n",
 		data->caldata.x, data->caldata.y, data->caldata.z, ret);
 
-	return snprintf(buf, PAGE_SIZE, "%d %d %d %d\n", ret, data->caldata.x,
-			data->caldata.y, data->caldata.z);
+	return snprintf(buf, PAGE_SIZE, "%d %d %d %d\n", ret,
+		data->caldata.x, data->caldata.y, data->caldata.z);
 }
 
 static ssize_t k2hh_calibration_store(struct device *dev,
 		struct device_attribute *attr, const char *buf, size_t size)
 {
 	int ret;
-	int64_t dEnable;
+	int64_t d_enable;
 	struct k2hh_p *data = dev_get_drvdata(dev);
 
-	ret = kstrtoll(buf, 10, &dEnable);
+	ret = kstrtoll(buf, 10, &d_enable);
 	if (ret < 0)
 		return ret;
 
-	ret = k2hh_do_calibrate(data, (int)dEnable);
+	ret = k2hh_do_calibrate(data, (int)d_enable);
 	if (ret < 0)
-		SENSOR_ERR(" accel calibrate failed\n");
+		SENSOR_ERR("accel calibrate failed\n");
 
 	return size;
 }
@@ -825,18 +858,18 @@ static ssize_t k2hh_lowpassfilter_store(struct device *dev,
 	struct device_attribute *attr, const char *buf, size_t size)
 {
 	int ret;
-	int64_t dEnable;
+	int64_t d_enable;
 	struct k2hh_p *data = dev_get_drvdata(dev);
 
 	SENSOR_INFO("\n");
 
-	ret = kstrtoll(buf, 10, &dEnable);
+	ret = kstrtoll(buf, 10, &d_enable);
 	if (ret < 0)
 		SENSOR_ERR("kstrtoll failed\n");
 
-	ret = k2hh_set_hr(data, dEnable);
+	ret = k2hh_set_hr(data, d_enable);
 	if (ret < 0)
-		SENSOR_ERR("k303c_acc_set_hr failed\n");
+		SENSOR_ERR("set_hr failed\n");
 
 	return size;
 }
@@ -848,7 +881,6 @@ static ssize_t k2hh_raw_data_read(struct device *dev,
 	struct k2hh_p *data = dev_get_drvdata(dev);
 
 	if (atomic_read(&data->enable) == OFF) {
-		SENSOR_INFO(", atomic_read\n");
 		k2hh_set_mode(data, K2HH_MODE_NORMAL);
 		msleep(20);
 		k2hh_read_accel_xyz(data, &acc);
@@ -857,15 +889,13 @@ static ssize_t k2hh_raw_data_read(struct device *dev,
 		acc.x = acc.x - data->caldata.x;
 		acc.y = acc.y - data->caldata.y;
 		acc.z = acc.z - data->caldata.z;
-	} else {
+	} else
 		acc = data->accdata;
-	}
 
 	return snprintf(buf, PAGE_SIZE, "%d,%d,%d\n",
 			acc.x, acc.y, acc.z);
 }
 
-#if !defined(CONFIG_SENSORS_K2HH_SMART_ALERT_NOT_SUPPORT)
 static ssize_t k2hh_reactive_alert_show(struct device *dev,
 	struct device_attribute *attr, char *buf)
 {
@@ -895,7 +925,7 @@ static ssize_t k2hh_reactive_alert_store(struct device *dev,
 		factory_mode = ON;
 		SENSOR_INFO("factory mode\n");
 	} else {
-		SENSOR_ERR(" invalid value %d\n", *buf);
+		SENSOR_ERR("invalid value %d\n", *buf);
 		return -EINVAL;
 	}
 
@@ -934,11 +964,11 @@ static ssize_t k2hh_reactive_alert_store(struct device *dev,
 			k2hh_i2c_write(data, INT_CFG1_REG, 0x0a);
 		}
 
-		k2hh_i2c_write(data, CTRL7_REG, CTRL7_LIR1);
-		k2hh_i2c_write(data, CTRL3_REG, CTRL3_IG1_INT1);
-
 		enable_irq(data->irq1);
 		enable_irq_wake(data->irq1);
+
+		k2hh_i2c_write(data, CTRL7_REG, CTRL7_LIR1);
+		k2hh_i2c_write(data, CTRL3_REG, CTRL3_IG1_INT1);
 
 		SENSOR_INFO("reactive alert is on!\n");
 	} else if ((enable == OFF) && (data->recog_flag == ON)) {
@@ -953,7 +983,6 @@ static ssize_t k2hh_reactive_alert_store(struct device *dev,
 
 	return size;
 }
-#endif
 
 static ssize_t k2hh_selftest_show(struct device *dev,
 	struct device_attribute *attr, char *buf)
@@ -961,7 +990,7 @@ static ssize_t k2hh_selftest_show(struct device *dev,
 	struct k2hh_p *data = dev_get_drvdata(dev);
 	struct k2hh_v acc;
 	unsigned char temp, backup[4];
-	int result = 1, i;
+	int result = 1, i, retry;
 	ssize_t ret;
 	s32 NO_ST[3] = {0, 0, 0};
 	s32 ST[3] = {0, 0, 0};
@@ -986,21 +1015,32 @@ static ssize_t k2hh_selftest_show(struct device *dev,
 	k2hh_read_accel_xyz(data, &acc);
 
 	for (i = 0; i < 5; i++) {
-		while (1) {
-			if (k2hh_i2c_read(data, STATUS_REG, &temp, 1) < 0) {
+		retry = 5;
+		do {
+			ret = k2hh_i2c_read(data, STATUS_REG, &temp, 1);
+			if (ret < 0) {
 				SENSOR_ERR("i2c error");
 				goto exit_status_err;
 			}
 
 			if (temp & 0x08)
 				break;
+
+			msleep(20);
+		} while (retry-- >= 0);
+
+		if (retry < 0) {
+			SENSOR_ERR("failed to update data\n");
+			goto exit_status_err;
 		}
 
 		k2hh_read_accel_xyz(data, &acc);
+
 		NO_ST[0] += acc.x;
 		NO_ST[1] += acc.y;
 		NO_ST[2] += acc.z;
 	}
+
 	NO_ST[0] /= 5;
 	NO_ST[1] /= 5;
 	NO_ST[2] /= 5;
@@ -1012,14 +1052,23 @@ static ssize_t k2hh_selftest_show(struct device *dev,
 	k2hh_read_accel_xyz(data, &acc);
 
 	for (i = 0; i < 5; i++) {
-		while (1) {
-			if (k2hh_i2c_read(data, STATUS_REG, &temp, 1) < 0) {
+		retry = 5;
+		do {
+			ret = k2hh_i2c_read(data, STATUS_REG, &temp, 1);
+			if (ret < 0) {
 				SENSOR_ERR("i2c error");
 				goto exit_status_err;
 			}
 
 			if (temp & 0x08)
 				break;
+
+			msleep(20);
+		} while (retry-- >= 0);
+
+		if (retry < 0) {
+			SENSOR_ERR("failed to update data\n");
+			goto exit_status_err;
 		}
 
 		k2hh_read_accel_xyz(data, &acc);
@@ -1079,20 +1128,17 @@ static DEVICE_ATTR(calibration, S_IRUGO | S_IWUSR | S_IWGRP,
 static DEVICE_ATTR(lowpassfilter, S_IRUGO | S_IWUSR | S_IWGRP,
 	k2hh_lowpassfilter_show, k2hh_lowpassfilter_store);
 static DEVICE_ATTR(raw_data, S_IRUGO, k2hh_raw_data_read, NULL);
-#if !defined(CONFIG_SENSORS_K2HH_SMART_ALERT_NOT_SUPPORT)
 static DEVICE_ATTR(reactive_alert, S_IRUGO | S_IWUSR | S_IWGRP,
 	k2hh_reactive_alert_show, k2hh_reactive_alert_store);
-#endif
+
 static struct device_attribute *sensor_attrs[] = {
 	&dev_attr_name,
 	&dev_attr_vendor,
 	&dev_attr_calibration,
 	&dev_attr_lowpassfilter,
 	&dev_attr_raw_data,
-	&dev_attr_selftest,
-#if !defined(CONFIG_SENSORS_K2HH_SMART_ALERT_NOT_SUPPORT)
 	&dev_attr_reactive_alert,
-#endif
+	&dev_attr_selftest,
 	NULL,
 };
 
@@ -1132,7 +1178,7 @@ static int k2hh_setup_pin(struct k2hh_p *data)
 
 	ret = gpio_direction_input(data->acc_int1);
 	if (ret < 0) {
-		SENSOR_ERR(" failed to set gpio %d as input (%d)\n",
+		SENSOR_ERR("failed to set gpio %d as input (%d)\n",
 			data->acc_int1, ret);
 		goto exit_acc_int1;
 	}
@@ -1141,10 +1187,11 @@ static int k2hh_setup_pin(struct k2hh_p *data)
 		"reactive_wake_lock");
 
 	data->irq1 = gpio_to_irq(data->acc_int1);
+	/* add IRQF_NO_SUSPEND option in case of Spreadtrum AP */
 	ret = request_threaded_irq(data->irq1, NULL, k2hh_irq_thread,
 		IRQF_TRIGGER_RISING | IRQF_ONESHOT, "k2hh_accel", data);
 	if (ret < 0) {
-		SENSOR_ERR(" can't allocate irq.\n");
+		SENSOR_ERR("can't allocate irq.\n");
 		goto exit_reactive_irq;
 	}
 
@@ -1206,22 +1253,21 @@ err_register_input_dev:
 
 static int k2hh_parse_dt(struct k2hh_p *data, struct device *dev)
 {
-	struct device_node *dNode = dev->of_node;
+	struct device_node *d_node = dev->of_node;
 	enum of_gpio_flags flags;
 	int ret;
 	u32 temp;
 
-	if (dNode == NULL)
+	if (d_node == NULL)
 		return -ENODEV;
 
-	data->acc_int1 = of_get_named_gpio_flags(dNode, "k2hh,irq_gpio", 0,
-		&flags);
+	data->acc_int1 = of_get_named_gpio_flags(d_node, "k2hh,irq_gpio", 0, &flags);
 	if (data->acc_int1 < 0) {
 		SENSOR_ERR("get acc_int1 error\n");
 		return -ENODEV;
 	}
 
-	ret = of_property_read_u32(dNode, "k2hh,axis_map_x", &temp);
+	ret = of_property_read_u32(d_node, "k2hh,axis_map_x", &temp);
 	if ((data->axis_map_x > 2) || (ret < 0)) {
 		SENSOR_ERR("invalid x axis_map value %u\n",
 			data->axis_map_x);
@@ -1229,7 +1275,7 @@ static int k2hh_parse_dt(struct k2hh_p *data, struct device *dev)
 	} else
 		data->axis_map_x = (u8)temp;
 
-	ret = of_property_read_u32(dNode, "k2hh,axis_map_y", &temp);
+	ret = of_property_read_u32(d_node, "k2hh,axis_map_y", &temp);
 	if ((data->axis_map_y > 2) || (ret < 0)) {
 		SENSOR_ERR("invalid y axis_map value %u\n",
 			data->axis_map_y);
@@ -1237,7 +1283,7 @@ static int k2hh_parse_dt(struct k2hh_p *data, struct device *dev)
 	} else
 		data->axis_map_y = (u8)temp;
 
-	ret = of_property_read_u32(dNode, "k2hh,axis_map_z", &temp);
+	ret = of_property_read_u32(d_node, "k2hh,axis_map_z", &temp);
 	if ((data->axis_map_z > 2) || (ret < 0)) {
 		SENSOR_ERR("invalid z axis_map value %u\n",
 			data->axis_map_z);
@@ -1245,7 +1291,7 @@ static int k2hh_parse_dt(struct k2hh_p *data, struct device *dev)
 	} else
 		data->axis_map_z = (u8)temp;
 
-	ret = of_property_read_u32(dNode, "k2hh,negate_x", &temp);
+	ret = of_property_read_u32(d_node, "k2hh,negate_x", &temp);
 	if ((data->negate_x > 1) || (ret < 0)) {
 		SENSOR_ERR("invalid x axis_map value %u\n",
 			data->negate_x);
@@ -1253,7 +1299,7 @@ static int k2hh_parse_dt(struct k2hh_p *data, struct device *dev)
 	} else
 		data->negate_x = (u8)temp;
 
-	ret = of_property_read_u32(dNode, "k2hh,negate_y", &temp);
+	ret = of_property_read_u32(d_node, "k2hh,negate_y", &temp);
 	if ((data->negate_y > 1) || (ret < 0)) {
 		SENSOR_ERR("invalid y axis_map value %u\n",
 			data->negate_y);
@@ -1261,7 +1307,7 @@ static int k2hh_parse_dt(struct k2hh_p *data, struct device *dev)
 	} else
 		data->negate_y = (u8)temp;
 
-	ret = of_property_read_u32(dNode, "k2hh,negate_z", &temp);
+	ret = of_property_read_u32(d_node, "k2hh,negate_z", &temp);
 	if ((data->negate_z > 1) || (ret < 0)) {
 		SENSOR_ERR("invalid z axis_map value %u\n",
 			data->negate_z);
@@ -1276,11 +1322,11 @@ static int k2hh_regulator_onoff(struct k2hh_p *data, bool onoff)
 {
 	int ret = 0;
 
-	SENSOR_INFO(" %s\n", (onoff) ? "on" : "off");
+	SENSOR_INFO("%s\n", (onoff) ? "on" : "off");
 
 #ifdef CONFIG_SENSORS_K2HH_VDD
 	if (!data->reg_vdd) {
-		SENSOR_INFO(" VDD get regulator\n");
+		SENSOR_INFO("VDD get regulator\n");
 		data->reg_vdd = devm_regulator_get(&data->client->dev,
 			"k2hh,vdd");
 		if (IS_ERR(data->reg_vdd)) {
@@ -1309,21 +1355,21 @@ static int k2hh_regulator_onoff(struct k2hh_p *data, bool onoff)
 #ifdef CONFIG_SENSORS_K2HH_VDD
 		ret = regulator_enable(data->reg_vdd);
 		if (ret)
-			SENSOR_ERR("Failed to enable vdd.\n");
+			SENSOR_ERR("failed to enable vdd.\n");
 #endif
 		ret = regulator_enable(data->reg_vio);
 		if (ret)
-			SENSOR_ERR("Failed to enable vio.\n");
+			SENSOR_ERR("failed to enable vio.\n");
 		msleep(30);
 	} else {
 #ifdef CONFIG_SENSORS_K2HH_VDD
 		ret = regulator_disable(data->reg_vdd);
 		if (ret)
-			SENSOR_ERR("Failed to disable vdd.\n");
+			SENSOR_ERR("failed to disable vdd.\n");
 #endif
 		ret = regulator_disable(data->reg_vio);
 		if (ret)
-			SENSOR_ERR("Failed to disable vio.\n");
+			SENSOR_ERR("failed to disable vio.\n");
 		msleep(30);
 	}
 
@@ -1331,7 +1377,7 @@ static int k2hh_regulator_onoff(struct k2hh_p *data, bool onoff)
 
 err_vio:
 #ifdef CONFIG_SENSORS_K2HH_VDD
-	SENSOR_INFO(" VDD put\n");
+	SENSOR_INFO("VDD put\n");
 	devm_regulator_put(data->reg_vdd);
 err_vdd:
 #endif
@@ -1344,20 +1390,20 @@ static int k2hh_probe(struct i2c_client *client,
 {
 	u8 temp;
 	int ret = -ENODEV, i;
-	struct k2hh_p *data = NULL;
+	struct k2hh_p *data;
 
-	SENSOR_INFO("Probe Start!\n");
+	SENSOR_INFO("start!\n");
 
 	if (!i2c_check_functionality(client->adapter, I2C_FUNC_I2C)) {
-		SENSOR_ERR(" i2c_check_functionality error\n");
+		SENSOR_ERR("i2c_check_functionality error\n");
 		goto exit;
 	}
 
 	data = kzalloc(sizeof(struct k2hh_p), GFP_KERNEL);
 	if (data == NULL) {
-		SENSOR_ERR(" kzalloc error\n");
+		SENSOR_ERR("kzalloc error\n");
 		ret = -ENOMEM;
-		goto exit_kzalloc;
+		goto exit;
 	}
 
 	i2c_set_clientdata(client, data);
@@ -1365,21 +1411,15 @@ static int k2hh_probe(struct i2c_client *client,
 
 	ret = k2hh_parse_dt(data, &client->dev);
 	if (ret < 0) {
-		SENSOR_ERR(" of_node error\n");
+		SENSOR_ERR("of_node error\n");
 		ret = -ENODEV;
 		goto exit_of_node;
 	}
 
 	ret = k2hh_regulator_onoff(data, true);
 	if (ret < 0) {
-		SENSOR_ERR(" No regulator\n");
-		goto exit_of_node;
-	}
-
-	ret = k2hh_setup_pin(data);
-	if (ret < 0) {
-		SENSOR_ERR(" could not setup pin\n");
-		goto exit_setup_pin;
+		SENSOR_ERR("No regulator\n");
+		goto exit_no_regulator;
 	}
 
 	mutex_init(&data->mode_mutex);
@@ -1409,8 +1449,12 @@ static int k2hh_probe(struct i2c_client *client,
 	if (ret < 0)
 		goto exit_input_init;
 
-	sensors_register(data->factory_device, data, sensor_attrs,
+	ret = sensors_register(&data->factory_device, data, sensor_attrs,
 		MODULE_NAME);
+	if (ret) {
+		SENSOR_ERR("failed to sensors_register (%d)\n", ret);
+		goto exit_sensor_register_failed;
+	}
 
 	/* accel_timer settings. we poll for light values using a timer. */
 	hrtimer_init(&data->accel_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
@@ -1422,13 +1466,19 @@ static int k2hh_probe(struct i2c_client *client,
 	data->accel_wq = create_singlethread_workqueue("accel_wq");
 	if (!data->accel_wq) {
 		ret = -ENOMEM;
-		SENSOR_ERR(" could not create workqueue\n");
+		SENSOR_ERR("could not create workqueue\n");
 		goto exit_create_workqueue;
 	}
 
 	/* this is the thread function we run on the work queue */
-	INIT_WORK(&data->work, k2hh_work_func);
+	INIT_WORK(&data->work_accel, k2hh_work_func);
 	INIT_DELAYED_WORK(&data->irq_work, k2hh_irq_work_func);
+
+	ret = k2hh_setup_pin(data);
+	if (ret < 0) {
+		SENSOR_ERR("could not setup pin\n");
+		goto exit_setup_pin;
+	}
 
 	atomic_set(&data->enable, OFF);
 	data->time_count = 0;
@@ -1439,66 +1489,34 @@ static int k2hh_probe(struct i2c_client *client,
 	k2hh_set_range(data, K2HH_RANGE_4G);
 	k2hh_set_mode(data, K2HH_MODE_SUSPEND);
 
-	SENSOR_INFO("Probe done!\n");
+	SENSOR_INFO("done!\n");
 
 	return 0;
 
+exit_setup_pin:
+	cancel_delayed_work_sync(&data->irq_work);
+	destroy_workqueue(data->accel_wq);
 exit_create_workqueue:
 	sensors_unregister(data->factory_device, sensor_attrs);
+exit_sensor_register_failed:
 	sensors_remove_symlink(&data->input->dev.kobj, data->input->name);
 	sysfs_remove_group(&data->input->dev.kobj, &k2hh_attribute_group);
 	input_unregister_device(data->input);
 exit_input_init:
 exit_read_chipid:
 	mutex_destroy(&data->mode_mutex);
-	free_irq(data->irq1, data);
-	cancel_delayed_work_sync(&data->irq_work);
-	wake_lock_destroy(&data->reactive_wake_lock);
-	gpio_free(data->acc_int1);
-exit_setup_pin:
 	k2hh_regulator_onoff(data, false);
+exit_no_regulator:
 exit_of_node:
 	kfree(data);
-exit_kzalloc:
 exit:
-	SENSOR_ERR(" Probe fail!\n");
+	SENSOR_ERR("fail!\n");
 	return ret;
 }
 
 static int k2hh_remove(struct i2c_client *client)
 {
-	struct k2hh_p *data = (struct k2hh_p *)i2c_get_clientdata(client);
-
-	if (atomic_read(&data->enable) == ON) {
-		k2hh_set_enable(data, OFF);
-		k2hh_set_mode(data, K2HH_MODE_SUSPEND);
-		atomic_set(&data->enable, OFF);
-	}
-#ifdef CONFIG_SENSORS_K2HH_VDD
-	if (data->reg_vdd) {
-		SENSOR_INFO(" VDD put\n");
-		devm_regulator_put(data->reg_vdd);
-	}
-#endif
-
-	if (data->reg_vio) {
-		SENSOR_INFO(" VIO put\n");
-		devm_regulator_put(data->reg_vio);
-	}
-
-	sensors_unregister(data->factory_device, sensor_attrs);
-	sensors_remove_symlink(&data->input->dev.kobj, data->input->name);
-	sysfs_remove_group(&data->input->dev.kobj, &k2hh_attribute_group);
-	input_unregister_device(data->input);
-
-	mutex_destroy(&data->mode_mutex);
-	free_irq(data->irq1, data);
-	cancel_delayed_work_sync(&data->irq_work);
-	wake_lock_destroy(&data->reactive_wake_lock);
-	gpio_free(data->acc_int1);
-
-	kfree(data);
-
+	SENSOR_INFO("\n");
 	return 0;
 }
 
@@ -1541,14 +1559,13 @@ static void k2hh_shutdown(struct i2c_client *client)
 	k2hh_set_mode(data, K2HH_MODE_SUSPEND);
 }
 
-
 static struct of_device_id k2hh_match_table[] = {
 	{ .compatible = "k2hh-i2c",},
 	{},
 };
 
 static const struct i2c_device_id k2hh_id[] = {
-	{ "k2hh-i2c", 0 },
+	{ "k2hh_match_table", 0 },
 	{ }
 };
 
@@ -1572,6 +1589,13 @@ static struct i2c_driver k2hh_driver = {
 
 static int __init k2hh_init(void)
 {
+#if defined(CONFIG_SAMSUNG_LPM_MODE)
+	if (poweroff_charging) {
+		SENSOR_INFO("Skip init due to low power charging mode %d\n", poweroff_charging);
+		return 0;
+	}
+#endif
+
 	return i2c_add_driver(&k2hh_driver);
 }
 
@@ -1586,3 +1610,4 @@ module_exit(k2hh_exit);
 MODULE_DESCRIPTION("k2hh accelerometer sensor driver");
 MODULE_AUTHOR("Samsung Electronics");
 MODULE_LICENSE("GPL");
+

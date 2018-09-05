@@ -29,6 +29,12 @@ struct msm_eeprom_ctrl_t;
 
 #define PROPERTY_MAXSIZE 32
 
+#if defined(CONFIG_GET_REAR_MODULE_ID) || defined(CONFIG_GET_FRONT_MODULE_ID)
+/* Module ID : 0x00A8~0x00B7(16Byte) for FROM, EEPROM (Don't support OTP)*/
+#define FROM_MODULE_ID_ADDR           0x00AE
+#define FROM_MODULE_ID_SIZE           10
+#endif
+
 struct msm_eeprom_ctrl_t {
 	struct platform_device *pdev;
 	struct mutex *eeprom_mutex;

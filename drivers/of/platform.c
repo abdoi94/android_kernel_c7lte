@@ -350,6 +350,12 @@ static int of_platform_bus_create(struct device_node *bus,
 		return 0;
 	}
 
+	if (of_node_check_flag(bus, OF_POPULATED_BUS)) {
+		pr_debug("%s() - skipping %s, already populated\n",
+			__func__, bus->full_name);
+		return 0;
+	}
+
 	auxdata = of_dev_lookup(lookup, bus);
 	if (auxdata) {
 		bus_id = auxdata->name;
@@ -401,7 +407,7 @@ int of_platform_bus_probe(struct device_node *root,
 	if (!root)
 		return -EINVAL;
 
-	pr_debug("of_platform_bus_probe()\n");
+	pr_debug("%s()\n", __func__);
 	pr_debug(" starting at: %s\n", root->full_name);
 
 	/* Do a self check of bus type, if there's a match, create children */
@@ -451,16 +457,63 @@ int of_platform_populate(struct device_node *root,
 	if (!root)
 		return -EINVAL;
 
+	pr_debug("%s()\n", __func__);
+	pr_debug(" starting at: %s\n", root->full_name);
+
 	for_each_child_of_node(root, child) {
 		rc = of_platform_bus_create(child, matches, lookup, parent, true);
 		if (rc)
 			break;
 	}
+	of_node_set_flag(root, OF_POPULATED_BUS);
 
 	of_node_put(root);
 	return rc;
 }
 EXPORT_SYMBOL_GPL(of_platform_populate);
+
+int of_platform_default_populate(struct device_node *root,
+				 const struct of_dev_auxdata *lookup,
+				 struct device *parent)
+{
+	return of_platform_populate(root, of_default_bus_match_table, lookup,
+				    parent);
+}
+EXPORT_SYMBOL_GPL(of_platform_default_populate);
+
+static int __init of_platform_default_populate_init(void)
+{
+	struct device_node *node;
+
+	if (!of_have_populated_dt())
+		return -ENODEV;
+
+	/*
+	 * Handle ramoops explicitly, since it is inside /reserved-memory,
+	 * which lacks a "compatible" property.
+	 */
+	node = of_find_node_by_path("/reserved-memory");
+	if (node) {
+		node = of_find_compatible_node(node, NULL, "ramoops");
+		if (node)
+			of_platform_device_create(node, NULL, NULL);
+	}
+
+#ifdef CONFIG_SEC_DEBUG
+	node = of_find_node_by_path("/reserved-memory");
+	if (node) {
+		node = of_find_compatible_node(node, NULL, "ss_plog");
+		if (node)
+			of_platform_device_create(node, NULL, NULL);
+	}
+#endif
+
+	/* Populate everything else. */
+	of_platform_default_populate(NULL, NULL, NULL);
+
+	return 0;
+}
+arch_initcall_sync(of_platform_default_populate_init);
 
 static int of_platform_device_destroy(struct device *dev, void *data)
 {
@@ -499,8 +552,75 @@ static int of_platform_device_destroy(struct device *dev, void *data)
  */
 void of_platform_depopulate(struct device *parent)
 {
-	device_for_each_child(parent, NULL, of_platform_device_destroy);
+	if (parent->of_node && of_node_check_flag(parent->of_node, OF_POPULATED_BUS)) {
+		device_for_each_child(parent, NULL, of_platform_device_destroy);
+		of_node_clear_flag(parent->of_node, OF_POPULATED_BUS);
+	}
 }
 EXPORT_SYMBOL_GPL(of_platform_depopulate);
+
+#ifdef CONFIG_OF_DYNAMIC
+static int of_platform_notify(struct notifier_block *nb,
+				unsigned long action, void *arg)
+{
+	struct of_reconfig_data *rd = arg;
+	struct platform_device *pdev_parent, *pdev;
+	bool children_left;
+
+	switch (of_reconfig_get_state_change(action, rd)) {
+	case OF_RECONFIG_CHANGE_ADD:
+		/* verify that the parent is a bus */
+		if (!of_node_check_flag(rd->dn->parent, OF_POPULATED_BUS))
+			return NOTIFY_OK;	/* not for us */
+
+		/* already populated? (driver using of_populate manually) */
+		if (of_node_check_flag(rd->dn, OF_POPULATED))
+			return NOTIFY_OK;
+
+		/* pdev_parent may be NULL when no bus platform device */
+		pdev_parent = of_find_device_by_node(rd->dn->parent);
+		pdev = of_platform_device_create(rd->dn, NULL,
+				pdev_parent ? &pdev_parent->dev : NULL);
+		of_dev_put(pdev_parent);
+
+		if (pdev == NULL) {
+			pr_err("%s: failed to create for '%s'\n",
+					__func__, rd->dn->full_name);
+			/* of_platform_device_create tosses the error code */
+			return notifier_from_errno(-EINVAL);
+		}
+		break;
+
+	case OF_RECONFIG_CHANGE_REMOVE:
+
+		/* already depopulated? */
+		if (!of_node_check_flag(rd->dn, OF_POPULATED))
+			return NOTIFY_OK;
+
+		/* find our device by node */
+		pdev = of_find_device_by_node(rd->dn);
+		if (pdev == NULL)
+			return NOTIFY_OK;	/* no? not meant for us */
+
+		/* unregister takes one ref away */
+		of_platform_device_destroy(&pdev->dev, &children_left);
+
+		/* and put the reference of the find */
+		of_dev_put(pdev);
+		break;
+	}
+
+	return NOTIFY_OK;
+}
+
+static struct notifier_block platform_of_notifier = {
+	.notifier_call = of_platform_notify,
+};
+
+void of_platform_register_reconfig_notifier(void)
+{
+	WARN_ON(of_reconfig_notifier_register(&platform_of_notifier));
+}
+#endif /* CONFIG_OF_DYNAMIC */
 
 #endif /* CONFIG_OF_ADDRESS */

@@ -583,6 +583,14 @@ config ZSWAP_ENABLE_WRITEBACK
 	depends on ZSWAP
 	default n
 
+config ZSWAP_SAME_PAGE_SHARING
+	bool "Enable same page sharing support in zswap"
+	depends on ZSWAP && !ZSWAP_ENABLE_WRITEBACK
+	default n
+	help
+	  This option adds a feature to share the compressed pages
+	  written to zswap if the pages are found to be same.
+
 config ZPOOL
 	tristate "Common API for compressed memory storage"
 	default n
@@ -755,3 +763,11 @@ config PROCESS_RECLAIM
 	 (addr, addr + size-bytes) of the process.
 
 	 Any other vaule is ignored.
+
+config MMAP_READAROUND_LIMIT
+	int "Limit mmap readaround upperbound"
+	default 0
+	help
+	  Inappropriate mmap readaround size can hurt device performance
+	  during the sluggish situation. Add the hard upper-limit for
+	  mmap readaround.

@@ -15,6 +15,10 @@
 #include "msm_isp_util.h"
 #include "msm_isp_axi_util.h"
 
+#if defined(CONFIG_USE_CAMERA_HW_BIG_DATA)
+#include "msm_sensor.h"
+#endif
+
 #define HANDLE_TO_IDX(handle) (handle & 0xFF)
 #define ISP_SOF_DEBUG_COUNT 5
 
@@ -617,7 +621,7 @@ void msm_isp_check_for_output_error(struct vfe_device *vfe_dev,
 	int i;
 
 	if (!vfe_dev || !sof_info) {
-		pr_err("%s %d failed: vfe_dev %p sof_info %p\n", __func__,
+		pr_err("%s %d failed: vfe_dev %pK sof_info %pK\n", __func__,
 			__LINE__, vfe_dev, sof_info);
 		return;
 	}
@@ -1176,7 +1180,7 @@ static int  msm_isp_axi_stream_enable_cfg(
 				!dual_vfe_res->axi_data[ISP_VFE0] ||
 				!dual_vfe_res->vfe_base[ISP_VFE1] ||
 				!dual_vfe_res->axi_data[ISP_VFE1]) {
-				pr_err("%s:%d failed vfe0 %p %p vfe %p %p\n",
+				pr_err("%s:%d failed vfe0 %pK %pK vfe %pK %pK\n",
 					__func__, __LINE__,
 					dual_vfe_res->vfe_base[ISP_VFE0],
 					dual_vfe_res->axi_data[ISP_VFE0],
@@ -1571,7 +1575,7 @@ static int msm_isp_cfg_ping_pong_address(struct vfe_device *vfe_dev,
 			!dual_vfe_res->axi_data[ISP_VFE0] ||
 			!dual_vfe_res->vfe_base[ISP_VFE1] ||
 			!dual_vfe_res->axi_data[ISP_VFE1]) {
-			pr_err("%s:%d failed vfe0 %p %p vfe %p %p\n",
+			pr_err("%s:%d failed vfe0 %pK %pK vfe %pK %pK\n",
 				__func__, __LINE__,
 				dual_vfe_res->vfe_base[ISP_VFE0],
 				dual_vfe_res->axi_data[ISP_VFE0],
@@ -1851,7 +1855,7 @@ int msm_isp_drop_frame(struct vfe_device *vfe_dev,
 	uint32_t pingpong_bit;
 
 	if (!vfe_dev || !stream_info || !ts || !sof_info) {
-		pr_err("%s %d vfe_dev %p stream_info %p ts %p op_info %p\n",
+		pr_err("%s %d vfe_dev %pK stream_info %pK ts %pK op_info %pK\n",
 			 __func__, __LINE__, vfe_dev, stream_info, ts,
 			sof_info);
 		return -EINVAL;
@@ -2105,14 +2109,117 @@ int msm_isp_axi_halt(struct vfe_device *vfe_dev,
 	struct msm_vfe_axi_halt_cmd *halt_cmd)
 {
 	int rc = 0;
+#if defined(CONFIG_USE_CAMERA_HW_BIG_DATA)
+	struct cam_hw_param *hw_param = NULL;
+	uint32_t *hw_cam_position = NULL;
+	uint32_t *hw_cam_secure = NULL;
+#endif
 
 	if (atomic_read(&vfe_dev->error_info.overflow_state) ==
 		OVERFLOW_DETECTED) {
-		ISP_DBG("%s: VFE%d already halted, direct return\n",
+		pr_err("%s: VFE%d Bus overflow detected: start recovery!\n",
 			__func__, vfe_dev->pdev->id);
-		return rc;
-	}
+#if defined(CONFIG_USE_CAMERA_HW_BIG_DATA)
+		msm_is_sec_get_sensor_position(&hw_cam_position);
+		if (hw_cam_position != NULL) {
+			switch(*hw_cam_position) {
+				case BACK_CAMERA_B:
+					if (!msm_is_sec_get_rear_hw_param(&hw_param)) {
+						if (hw_param != NULL && (hw_param->mipi_chk == FALSE)) {
+							switch (hw_param->comp_chk) {
+								case TRUE:
+									pr_err("[HWB_DBG][R][MIPI_C] Err\n");
+									hw_param->mipi_comp_err_cnt++;
+									hw_param->mipi_chk = TRUE;
+									hw_param->need_update_to_file = TRUE;
+									break;
 
+								case FALSE:
+									pr_err("[HWB_DBG][R][MIPI_S] Err\n");
+									hw_param->mipi_sensor_err_cnt++;
+									hw_param->mipi_chk = TRUE;
+									hw_param->need_update_to_file = TRUE;
+									break;
+
+								default:
+									pr_err("[HWB_DBG][R][MIPI] Unsupport\n");
+									break;
+							}
+						}
+					}
+					break;
+
+				case FRONT_CAMERA_B:
+					msm_is_sec_get_secure_mode(&hw_cam_secure);
+					if (hw_cam_secure != NULL) {
+						switch(*hw_cam_secure) {
+							case FALSE:
+								if (!msm_is_sec_get_front_hw_param(&hw_param)) {
+									if (hw_param != NULL && (hw_param->mipi_chk == FALSE)) {
+										switch (hw_param->comp_chk) {
+											case TRUE:
+												pr_err("[HWB_DBG][F][MIPI_C] Err\n");
+												hw_param->mipi_comp_err_cnt++;
+												hw_param->mipi_chk = TRUE;
+												hw_param->need_update_to_file = TRUE;
+												break;
+
+											case FALSE:
+												pr_err("[HWB_DBG][F][MIPI_S] Err\n");
+												hw_param->mipi_sensor_err_cnt++;
+												hw_param->mipi_chk = TRUE;
+												hw_param->need_update_to_file = TRUE;
+												break;
+
+											default:
+												pr_err("[HWB_DBG][F][MIPI] Unsupport\n");
+												break;
+										}
+									}
+								}
+								break;
+
+							case TRUE:
+								if (!msm_is_sec_get_iris_hw_param(&hw_param)) {
+									if (hw_param != NULL && (hw_param->mipi_chk == FALSE)) {
+										switch (hw_param->comp_chk) {
+											case TRUE:
+												pr_err("[HWB_DBG][I][MIPI_C] Err\n");
+												hw_param->mipi_comp_err_cnt++;
+												hw_param->mipi_chk = TRUE;
+												hw_param->need_update_to_file = TRUE;
+												break;
+
+											case FALSE:
+												pr_err("[HWB_DBG][I][MIPI_S] Err\n");
+												hw_param->mipi_sensor_err_cnt++;
+												hw_param->mipi_chk = TRUE;
+												hw_param->need_update_to_file = TRUE;
+												break;
+
+											default:
+												pr_err("[HWB_DBG][I][MIPI] Unsupport\n");
+												break;
+										}
+									}
+								}
+								break;
+
+							default:
+								pr_err("[HWB_DBG][F_I][MIPI] Unsupport\n");
+								break;
+						}
+					}
+					break;
+
+				default:
+					pr_err("[HWB_DBG][NON][MIPI] Unsupport\n");
+					break;
+			}
+		}
+#endif
+	}
+	
 	if (halt_cmd->overflow_detected) {
 		/*Store current IRQ mask*/
 		if (vfe_dev->error_info.overflow_recover_irq_mask0 == 0) {
@@ -2149,7 +2256,7 @@ int msm_isp_axi_reset(struct vfe_device *vfe_dev,
 	unsigned long flags;
 
 	if (!reset_cmd) {
-		pr_err("%s: NULL pointer reset cmd %p\n", __func__, reset_cmd);
+		pr_err("%s: NULL pointer reset cmd %pK\n", __func__, reset_cmd);
 		rc = -1;
 		return rc;
 	}
@@ -2851,7 +2958,7 @@ static int msm_isp_return_empty_buffer(struct vfe_device *vfe_dev,
 	struct msm_isp_timestamp timestamp;
 
 	if (!vfe_dev || !stream_info) {
-		pr_err("%s %d failed: vfe_dev %p stream_info %p\n", __func__,
+		pr_err("%s %d failed: vfe_dev %pK stream_info %pK\n", __func__,
 			__LINE__, vfe_dev, stream_info);
 		return -EINVAL;
 	}
@@ -2929,7 +3036,7 @@ static int msm_isp_request_frame(struct vfe_device *vfe_dev,
 	bool dual_vfe = false;
 
 	if (!vfe_dev || !stream_info) {
-		pr_err("%s %d failed: vfe_dev %p stream_info %p\n", __func__,
+		pr_err("%s %d failed: vfe_dev %pK stream_info %pK\n", __func__,
 			__LINE__, vfe_dev, stream_info);
 		return -EINVAL;
 	}
@@ -3582,7 +3689,7 @@ void msm_isp_axi_disable_all_wm(struct vfe_device *vfe_dev)
 	int i, j;
 
 	if (!vfe_dev || !axi_data) {
-		pr_err("%s: error  %p %p\n", __func__, vfe_dev, axi_data);
+		pr_err("%s: error  %pK %pK\n", __func__, vfe_dev, axi_data);
 		return;
 	}
 

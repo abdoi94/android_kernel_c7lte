@@ -3482,10 +3482,6 @@ static int etm_cpu_callback(struct notifier_block *nfb, unsigned long action,
 out:
 	return NOTIFY_OK;
 err1:
-	if (--count == 0) {
-		unregister_hotcpu_notifier(&etm_cpu_notifier);
-		unregister_hotcpu_notifier(&etm_cpu_dying_notifier);
-	}
 	if (clk_disable[cpu]) {
 		clk_disable_unprepare(etmdrvdata[cpu]->clk);
 		clk_disable[cpu] = false;
@@ -3706,8 +3702,10 @@ err1:
 		unregister_hotcpu_notifier(&etm_cpu_notifier);
 		unregister_hotcpu_notifier(&etm_cpu_dying_notifier);
 	}
+	etmdrvdata[cpu] = NULL;
 err0:
 	wakeup_source_trash(&drvdata->ws);
+	platform_set_drvdata(pdev, NULL);
 	return ret;
 }
 

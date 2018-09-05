@@ -95,7 +95,7 @@ int of_update_supported_list(struct i2c_client *i2c,
 
 	pr_info("%s\n", __func__);
 
-	np_muic = of_find_node_by_path("/muic");
+	np_muic = of_find_node_by_name(NULL, "muic");
 	if (np_muic == NULL)
 		return -EINVAL;
 
@@ -190,6 +190,12 @@ int of_muic_dt(struct i2c_client *i2c, struct muic_platform_data *pdata)
 	struct device_node *np_muic = i2c->dev.of_node;
 	muic_data_t *pmuic = i2c_get_clientdata(i2c);
 	int ret=0;
+#if defined(CONFIG_MUIC_UNIVERSAL_MULTI_SUPPORT) || defined(CONFIG_MUIC_UNIVERSAL_SM5705_AFC)
+	int temp;
+#endif
+#ifdef CONFIG_MUIC_SM570X_SWITCH_CONTROL_GPIO
+	int sm570x_switch_gpio;
+#endif
 
 	pr_info("%s\n", __func__);
 
@@ -203,6 +209,15 @@ int of_muic_dt(struct i2c_client *i2c, struct muic_platform_data *pdata)
 	else
 		pr_info("%s: chip_name is %s\n", __func__, pmuic->chip_name);
 
+#if defined(CONFIG_MUIC_UNIVERSAL_MULTI_SUPPORT)
+	ret = of_property_read_u32(np_muic, "muic-universal,afc-support", &temp);
+	pmuic->is_afc_support = (bool)(temp & 0x1);
+
+	if (ret)
+		pr_info("%s: afc-support node is Empty\n", __func__);
+	else
+		pr_info("%s: afc is %s\n", __func__, (pmuic->is_afc_support) ? "enable" : "disable");
+#endif
 
 	pdata->irq_gpio = of_get_named_gpio(np_muic, "muic-universal,irq-gpio", 0);
 	pr_info("%s: irq-gpio: %u\n", __func__, pdata->irq_gpio);
@@ -214,12 +229,10 @@ int of_muic_dt(struct i2c_client *i2c, struct muic_platform_data *pdata)
 	if (!ret) {
 		pr_err("GPIO_UART_SEL is not valid!!!\n");
 		pmuic->gpio_uart_sel = muic_gpio_uart_sel = 0;
-		return ret;
 	} else {
 		ret = gpio_request(muic_gpio_uart_sel, "GPIO_UART_SEL");
 		if (ret) {
 			pr_err("failed to gpio_request GPIO_UART_SEL\n");
-			return ret;
 		}
 
 		muic_gpio_uart_ap = of_property_read_bool(np_muic, "muic-universal,uart-ap");
@@ -229,6 +242,42 @@ int of_muic_dt(struct i2c_client *i2c, struct muic_platform_data *pdata)
 	}
 
 	pmuic->gpio_uart_sel = muic_gpio_uart_sel;
+
+#ifdef CONFIG_MUIC_SM570X_SWITCH_CONTROL_GPIO
+	sm570x_switch_gpio = of_get_named_gpio(np_muic, "muic,sm570x_switch_gpio", 0);
+	ret = gpio_is_valid(sm570x_switch_gpio);
+	if (!ret) {
+		pr_err("sm570x_switch_gpio is not valid!!!\n");
+		pmuic->sm570x_switch_gpio = 0;
+		return ret;
+	} else {
+		pr_info("%s: sm570x_switch_gpio: %d\n", __func__, sm570x_switch_gpio);
+	}
+
+	pmuic->sm570x_switch_gpio = sm570x_switch_gpio;
+#endif
+
+#ifdef CONFIG_MUIC_UNIVERSAL_SM5705_AFC
+	ret = of_property_read_u32(np_muic, "muic,max-afc-support-volt", &temp);
+	if (ret) {
+		pmuic->max_afc_supported_volt = 4; //default 9V, 5 + 4
+		pr_info("%s: max-afc-supported-volt node is Empty\n", __func__);
+	}
+	else {
+		pmuic->max_afc_supported_volt = temp;
+		pr_info("%s: max-afc-supported-volt is %d\n", __func__, pmuic->max_afc_supported_volt);
+	}
+
+	ret = of_property_read_u32(np_muic, "muic,max-afc-support-cur", &temp);
+	if (ret) {
+		pmuic->max_afc_supported_cur= 8; //default 2A, 0.75 + 0.15 * 8
+		pr_info("%s: max-afc-supported-cur node is Empty\n", __func__);
+	}
+	else {
+		pmuic->max_afc_supported_cur= temp;
+		pr_info("%s: max-afc-supported-cur is %d\n", __func__, pmuic->max_afc_supported_cur);
+	}
+#endif
 
 	return 0;
 }

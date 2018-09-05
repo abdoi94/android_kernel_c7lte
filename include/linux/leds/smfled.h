@@ -12,6 +12,9 @@
 #ifndef LINUX_LEDS_SMFLED_H
 #define LINUX_LEDS_SMFLED_H
 #include <linux/leds/flashlight.h>
+#include <linux/leds/msm_ext_pmic_flash.h>
+
+#define __MANGLE_NAME(_f_) _f_##_sm5703
 
 struct sm_fled_info;
 typedef int (*sm_hal_fled_init)(struct sm_fled_info *info);
@@ -91,5 +94,15 @@ sm_fled_info_t *sm_fled_get_info_by_name(char *name);
  * fled_info->hal->fled_set_flash_current(fled_info,
  *                                        150, 200);
  */
+// For msm_led_trigger
+int sm5703_fled_led_off(sm_fled_info_t *fled_info);
+int sm5703_fled_torch_on(sm_fled_info_t *fled_info);
+int sm5703_fled_flash_on(sm_fled_info_t *fled_info);
 
+// For msm_flash
+int msm_fled_led_off_sm5703(ext_pmic_flash_ctrl_t *flash_ctrl);
+int msm_fled_torch_on_sm5703(ext_pmic_flash_ctrl_t *flash_ctrl);
+int msm_fled_flash_on_sm5703(ext_pmic_flash_ctrl_t *flash_ctrl);
+int msm_fled_pre_flash_on_sm5703(ext_pmic_flash_ctrl_t *flash_ctrl);
+int msm_fled_flash_on_set_current_sm5703(ext_pmic_flash_ctrl_t *flash_ctrl);
 #endif /*LINUX_LEDS_SMFLED_H*/

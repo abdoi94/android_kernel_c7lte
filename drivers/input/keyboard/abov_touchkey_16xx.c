@@ -43,6 +43,12 @@
 #include <linux/input/input_booster.h>
 #endif
 
+#ifdef CONFIG_VBUS_NOTIFIER
+#include <linux/muic/muic.h>
+#include <linux/muic/muic_notifier.h>
+#include <linux/vbus_notifier.h>
+#endif
+
 #ifdef CONFIG_TOUCHSCREEN_DUMP_MODE
 #include <linux/sec_debug.h>
 #endif
@@ -60,6 +66,7 @@
 #define ABOV_DIFFDATA		0x0A
 #define ABOV_RAWDATA		0x0E
 #define ABOV_VENDORID		0x12
+#define ABOV_TSPTA		0x1D
 #define ABOV_GLOVE		0x13
 #define ABOV_MD_VER		0x14
 
@@ -104,12 +111,54 @@ enum {
 	SDCARD,
 };
 
+
+#define LIGHT_VERSION_PATH		"/efs/FactoryApp/tkey_light_version"
+#define LIGHT_TABLE_PATH		"/efs/FactoryApp/tkey_light"
+#define LIGHT_CRC_PATH			"/efs/FactoryApp/tkey_light_crc"
+#define LIGHT_TABLE_PATH_LEN		50
+#define LIGHT_VERSION_LEN		25
+#define LIGHT_CRC_SIZE			10
+#define LIGHT_DATA_SIZE			5
+#define LIGHT_VOLTAGE_MIN_VAL		3000
+#define LIGHT_TABLE_MAX			3
+
+struct light_info {
+	int octa_id;
+	int vol_mv;
+};
+
+enum WINDOW_COLOR {
+	WINDOW_COLOR_BLACK_UTYPE = 0,
+	WINDOW_COLOR_BLACK,
+	WINDOW_COLOR_WHITE,
+	WINDOW_COLOR_GOLD,
+	WINDOW_COLOR_SILVER,
+	WINDOW_COLOR_GREEN,
+	WINDOW_COLOR_BLUE,
+	WINDOW_COLOR_PINKGOLD,
+};
+
+#define WINDOW_COLOR_DEFAULT		WINDOW_COLOR_WHITE
+
+/* should be pair table item numbers and table size */
+#define LIGHT_VERSION			170330
+
+struct light_info tkey_light_voltage_table[LIGHT_TABLE_MAX] =
+{
+	/* octa id, voltage */
+	{ WINDOW_COLOR_WHITE,		3300},
+	{ WINDOW_COLOR_BLUE,		3300},
+	{ WINDOW_COLOR_BLACK,		3300},
+};
+/**************************************************/
+
 #ifdef CONFIG_SAMSUNG_LPM_MODE
 extern int poweroff_charging;
 #endif
 extern int get_lcd_attached(char *mode);
 extern unsigned int system_rev;
 extern struct class *sec_class;
+static bool g_ta_connected =0;
 static int touchkey_keycode[] = { 0,
 	KEY_RECENT, KEY_BACK,
 };
@@ -153,6 +202,16 @@ struct abov_ft1604_info {
 #ifdef CONFIG_INPUT_BOOSTER
 	struct input_booster *tkey_booster;
 #endif
+
+#ifdef CONFIG_VBUS_NOTIFIER
+	struct notifier_block vbus_nb;
+#endif
+
+	struct delayed_work efs_open_work;
+	int light_version_efs;
+	char light_version_full_efs[LIGHT_VERSION_LEN];
+	char light_version_full_bin[LIGHT_VERSION_LEN];
+	int light_table_crc;
 };
 
 struct abov_ft1604_devicetree_data {
@@ -167,9 +226,11 @@ struct abov_ft1604_devicetree_data {
 	int bringup;
 	struct regulator *vdd_io_vreg;
 	struct regulator *avdd_vreg;
+	struct regulator *vdd_led;
 	const char *fw_name;
 	int (*power) (struct abov_ft1604_devicetree_data *dtdata, bool on);
 	int (*keyled) (bool on);
+	bool reverse_key;
 };
 
 
@@ -177,6 +238,8 @@ static int abov_tk_input_open(struct input_dev *dev);
 static void abov_tk_input_close(struct input_dev *dev);
 
 static int abov_tk_i2c_read_checksum(struct abov_ft1604_info *info);
+static int efs_read_light_table_version(struct abov_ft1604_info *info);
+static void abov_set_ta_status(struct abov_ft1604_info *info);
 
 static int abov_touchkey_led_status;
 static int abov_touchled_cmd_reserved;
@@ -187,6 +250,451 @@ static int abov_glove_mode_enable(struct i2c_client *client, u8 cmd)
 	return i2c_smbus_write_byte_data(client, ABOV_GLOVE, cmd);
 }
 #endif
+
+static void change_touch_key_led_voltage(struct device *dev, int vol_mv)
+{
+	struct abov_ft1604_info *info = dev_get_drvdata(dev);	
+	int ret;
+
+	ret = regulator_set_voltage(info->dtdata->vdd_led, vol_mv * 1000, vol_mv * 1000);
+	if (ret)
+		input_err(true, dev, "%s: failed to set key led %d mv, %d\n",
+				__func__, vol_mv, ret);
+	
+	input_info(true, dev, "%s: %dmV\n", __func__, vol_mv);
+}
+
+static ssize_t brightness_control(struct device *dev,
+		struct device_attribute *attr,
+		const char *buf, size_t size)
+{
+	struct abov_ft1604_info *info = dev_get_drvdata(dev);
+	int data;
+
+	if (sscanf(buf, "%d\n", &data) == 1)
+		change_touch_key_led_voltage(&info->client->dev, data);
+	else
+		input_err(true, &info->client->dev, "%s Error\n", __func__);
+
+	return size;
+}
+
+static int read_window_type(void)
+{
+	struct file *type_filp = NULL;
+	mm_segment_t old_fs;
+	int ret = 0;
+	char window_type[10] = {0, };
+
+	old_fs = get_fs();
+	set_fs(KERNEL_DS);
+
+	type_filp = filp_open("/sys/class/lcd/panel/window_type", O_RDONLY, 0440);
+	if (IS_ERR(type_filp)) {
+		set_fs(old_fs);
+		ret = PTR_ERR(type_filp);
+		return ret;
+	}
+
+	ret = type_filp->f_op->read(type_filp, window_type,
+			sizeof(window_type), &type_filp->f_pos);
+	if (ret != 9 * sizeof(char)) {
+		pr_err("%s touchkey %s: fd read fail\n", SECLOG, __func__);
+		ret = -EIO;
+		return ret;
+	}
+
+	filp_close(type_filp, current->files);
+	set_fs(old_fs);
+
+	if (window_type[1] < '0' || window_type[1] >= 'f')
+		return -EAGAIN;
+
+	ret = (window_type[1] - '0') & 0x0f;
+	pr_info("%s touchkey %s: %d\n", SECLOG, __func__, ret);
+	return ret;
+}
+
+static int efs_calculate_crc (struct abov_ft1604_info *info)
+{
+	struct file *temp_file = NULL;
+	int crc = info->light_version_efs;
+	mm_segment_t old_fs;
+	char predefine_value_path[LIGHT_TABLE_PATH_LEN];
+	int ret = 0, i;
+	char temp_vol[LIGHT_CRC_SIZE] = {0, };
+	int table_size;
+
+	efs_read_light_table_version(info);
+	table_size = (int)strlen(info->light_version_full_efs) - 8;
+
+	for (i = 0; i < table_size; i++) {
+		char octa_temp = info->light_version_full_efs[8 + i];
+		int octa_temp_i;
+
+		if (octa_temp >= 'A')
+			octa_temp_i = octa_temp - 'A' + 0x0A;
+		else
+			octa_temp_i = octa_temp - '0';
+		
+		input_info(true, &info->client->dev, "%s: octa %d\n", __func__, octa_temp_i);
+
+		snprintf(predefine_value_path, LIGHT_TABLE_PATH_LEN, "%s%d",
+				LIGHT_TABLE_PATH, octa_temp_i);
+		old_fs = get_fs();
+		set_fs(KERNEL_DS);
+		temp_file = filp_open(predefine_value_path, O_RDONLY, 0440);
+		if (!IS_ERR(temp_file)) {
+			temp_file->f_op->read(temp_file, temp_vol,
+					sizeof(temp_vol), &temp_file->f_pos);
+			filp_close(temp_file, current->files);
+			if (kstrtoint(temp_vol, 0, &ret) < 0) {
+				ret = -EIO;
+			} else {
+				crc += octa_temp_i;
+				crc += ret;
+				ret = 0;
+			}
+		}
+		set_fs(old_fs);
+	}
+
+	if (!ret)
+		ret = crc;
+
+	return ret;
+}
+
+static int efs_read_crc(struct abov_ft1604_info *info)
+{
+	struct file *temp_file = NULL;
+	char crc[LIGHT_CRC_SIZE] = {0, };
+	mm_segment_t old_fs;
+	int ret = 0;
+	
+	old_fs = get_fs();
+	set_fs(KERNEL_DS);
+	temp_file = filp_open(LIGHT_CRC_PATH, O_RDONLY, 0440);
+	if (IS_ERR(temp_file)) {
+		ret = PTR_ERR(temp_file);
+		input_info(true, &info->client->dev,
+				"%s: failed to open efs file %d\n", __func__, ret);
+	} else {
+		temp_file->f_op->read(temp_file, crc, sizeof(crc), &temp_file->f_pos);
+		filp_close(temp_file, current->files);
+		if (kstrtoint(crc, 0, &ret) < 0)
+			ret = -EIO;
+	}
+	set_fs(old_fs);
+
+	return ret;
+}
+
+
+static bool check_light_table_crc(struct abov_ft1604_info *info)
+{
+	int crc_efs = efs_read_crc(info);
+
+	if (info->light_version_efs == LIGHT_VERSION) {
+		/* compare efs crc file with binary crc*/
+		input_info(true, &info->client->dev,
+				"%s: efs:%d, bin:%d\n",
+				__func__, crc_efs, info->light_table_crc);
+		if (crc_efs != info->light_table_crc)
+			return false;
+	}
+
+	return true;
+}
+
+static int efs_write_light_table_crc(struct abov_ft1604_info *info, int crc_cal)
+{
+	struct file *temp_file = NULL;
+	char crc[LIGHT_CRC_SIZE] = {0, };
+	mm_segment_t old_fs;
+	int ret = 0;
+
+	old_fs = get_fs();
+	set_fs(KERNEL_DS);
+	temp_file = filp_open(LIGHT_CRC_PATH, O_TRUNC | O_RDWR | O_CREAT, 0660);
+	if (IS_ERR(temp_file)) {
+		ret = PTR_ERR(temp_file);
+		input_info(true, &info->client->dev,
+				"%s: failed to open efs file %d\n", __func__, ret);
+	} else {
+		snprintf(crc, sizeof(crc), "%d", crc_cal);
+		temp_file->f_op->write(temp_file, crc, sizeof(crc), &temp_file->f_pos);
+		filp_close(temp_file, current->files);
+		input_info(true, &info->client->dev, "%s: %s\n", __func__, crc);
+	}
+	set_fs(old_fs);
+	return ret;
+}
+
+static int efs_write_light_table_version(struct abov_ft1604_info *info, char *full_version)
+{
+	struct file *temp_file = NULL;
+	mm_segment_t old_fs;
+	int ret = 0;
+
+	old_fs = get_fs();
+	set_fs(KERNEL_DS);
+	temp_file = filp_open(LIGHT_VERSION_PATH, O_TRUNC | O_RDWR | O_CREAT, 0660);
+	if (IS_ERR(temp_file)) {
+		ret = -ENOENT;
+	} else {
+		temp_file->f_op->write(temp_file, full_version,
+				LIGHT_VERSION_LEN, &temp_file->f_pos);
+		filp_close(temp_file, current->files);
+		input_info(true, &info->client->dev, "%s: version = %s\n",
+				__func__, full_version);
+	}
+	set_fs(old_fs);
+	return ret;
+}
+
+static int efs_write_light_table(struct abov_ft1604_info *info, struct light_info table)
+{
+	struct file *type_filp = NULL;
+	mm_segment_t old_fs;
+	int ret = 0;
+	char predefine_value_path[LIGHT_TABLE_PATH_LEN];
+	char vol_mv[LIGHT_DATA_SIZE] = {0, };
+
+	snprintf(predefine_value_path, LIGHT_TABLE_PATH_LEN,
+			"%s%d", LIGHT_TABLE_PATH, table.octa_id);
+	snprintf(vol_mv, sizeof(vol_mv), "%d", table.vol_mv);
+
+	input_info(true, &info->client->dev, "%s: make %s\n", __func__, predefine_value_path);
+
+	old_fs = get_fs();
+	set_fs(KERNEL_DS);
+
+	type_filp = filp_open(predefine_value_path, O_TRUNC | O_RDWR | O_CREAT, 0660);
+	if (IS_ERR(type_filp)) {
+		set_fs(old_fs);
+		ret = PTR_ERR(type_filp);
+		input_err(true, &info->client->dev, "%s: open fail :%d\n",
+			__func__, ret);
+		return ret;
+	}
+
+	type_filp->f_op->write(type_filp, vol_mv, sizeof(vol_mv), &type_filp->f_pos);
+	filp_close(type_filp, current->files);
+	set_fs(old_fs);
+
+	return ret;
+}
+
+static int efs_write(struct abov_ft1604_info *info)
+{
+	int ret = 0;
+	int i, crc_cal;
+
+	ret = efs_write_light_table_version(info, info->light_version_full_bin);
+	if (ret < 0)
+		return ret;
+	info->light_version_efs = LIGHT_VERSION;
+
+	for (i = 0; i < LIGHT_TABLE_MAX; i++) {
+		ret = efs_write_light_table(info, tkey_light_voltage_table[i]);
+		if (ret < 0)
+			break;
+	}
+	if (ret < 0)
+		return ret;
+
+	crc_cal = efs_calculate_crc(info);
+	if (crc_cal < 0)
+		return crc_cal;
+
+	ret = efs_write_light_table_crc(info, crc_cal);
+	if (ret < 0)
+		return ret;
+
+	if (!check_light_table_crc(info))
+		ret = -EIO;
+
+	return ret;
+}
+
+static int pick_light_table_version(char* str)
+{
+	static char* str_addr;
+	char* token = NULL;
+	int ret = 0;
+	
+	if (str != NULL)
+		str_addr = str;
+	else if (str_addr == NULL)
+		return 0;
+
+	token = str_addr;
+	while (true) {
+		if (!(*str_addr)) {
+			break;
+ 		} else if (*str_addr == 'T') {
+			*str_addr = '0';
+		} else if (*str_addr == '.') {
+			*str_addr = '\0';
+			str_addr = str_addr + 1;
+			break;
+		}
+
+		str_addr++;
+	}
+
+	if (kstrtoint(token + 1, 0, &ret) < 0)
+		return 0;
+
+	return ret;
+}
+
+
+static int efs_read_light_table_version(struct abov_ft1604_info *info)
+{
+	struct file *temp_file = NULL;
+	char version[LIGHT_VERSION_LEN] = {0, };
+	mm_segment_t old_fs;
+	int ret = 0;
+	
+	old_fs = get_fs();
+	set_fs(KERNEL_DS);
+	temp_file = filp_open(LIGHT_VERSION_PATH, O_RDONLY, 0440);
+	if (IS_ERR(temp_file)) {
+		ret = PTR_ERR(temp_file);
+	} else {
+		temp_file->f_op->read(temp_file, version, sizeof(version), &temp_file->f_pos);
+		filp_close(temp_file, current->files);
+		input_info(true, &info->client->dev,
+				"%s: table full version = %s\n", __func__, version);
+		snprintf(info->light_version_full_efs,
+				sizeof(info->light_version_full_efs), version);
+		info->light_version_efs = pick_light_table_version(version);
+		input_dbg(true, &info->client->dev,
+				"%s: table version = %d\n", __func__, info->light_version_efs);
+	}
+	set_fs(old_fs);
+
+	return ret;
+}
+
+static int efs_read_light_table(struct abov_ft1604_info *info, int octa_id)
+{
+	struct file *type_filp = NULL;
+	mm_segment_t old_fs;
+	char predefine_value_path[LIGHT_TABLE_PATH_LEN];
+	char voltage[LIGHT_DATA_SIZE] = {0, };
+	int ret;
+
+	snprintf(predefine_value_path, LIGHT_TABLE_PATH_LEN,
+		"%s%d", LIGHT_TABLE_PATH, octa_id);
+
+	input_info(true, &info->client->dev, "%s: %s\n", __func__, predefine_value_path);
+
+	old_fs = get_fs();
+	set_fs(KERNEL_DS);
+
+	type_filp = filp_open(predefine_value_path, O_RDONLY, 0440);
+	if (IS_ERR(type_filp)) {
+		set_fs(old_fs);
+		ret = PTR_ERR(type_filp);
+		input_err(true, &info->client->dev,
+				"%s: fail to open light data %d\n", __func__, ret);
+		return ret;
+	}
+
+	type_filp->f_op->read(type_filp, voltage, sizeof(voltage), &type_filp->f_pos);
+	filp_close(type_filp, current->files);
+	set_fs(old_fs);
+
+	if (kstrtoint(voltage, 0, &ret) < 0)
+		return -EIO;
+
+	return ret;
+}
+
+static int efs_read_light_table_with_default(struct abov_ft1604_info *info, int octa_id)
+{
+	bool set_default = false;
+	int ret;
+
+retry:
+	if (set_default)
+		octa_id = WINDOW_COLOR_DEFAULT;
+
+	ret = efs_read_light_table(info, octa_id);
+	if (ret < 0) {
+		if (!set_default) {
+			set_default = true;
+			goto retry;
+		}
+	}
+
+	return ret;
+}
+
+static bool need_update_light_table(struct abov_ft1604_info *info)
+{
+	/* Check version file exist*/
+	if (efs_read_light_table_version(info) < 0) {
+		return true;
+	}
+
+	/* Compare version */
+	input_info(true, &info->client->dev,
+			"%s: efs:%d, bin:%d\n", __func__,
+			info->light_version_efs, LIGHT_VERSION);
+	if (info->light_version_efs < LIGHT_VERSION)
+		return true;
+
+	/* Check CRC */
+	if (!check_light_table_crc(info)) {
+		input_info(true, &info->client->dev,
+				"%s: crc is diffrent\n", __func__);
+		return true;
+	}
+
+	return false;
+}
+
+static void touchkey_efs_open_work(struct work_struct *work)
+{
+	struct abov_ft1604_info *info =
+			container_of(work, struct abov_ft1604_info, efs_open_work.work);
+	int window_type;
+	static int count = 0;
+	int vol_mv;
+
+	if (need_update_light_table(info)) {
+		if (efs_write(info) < 0)
+			goto out;
+	}
+
+	window_type = read_window_type();
+	if (window_type < 0)
+		goto out;
+
+	vol_mv = efs_read_light_table_with_default(info, window_type);
+	if (vol_mv >= LIGHT_VOLTAGE_MIN_VAL) {
+		change_touch_key_led_voltage(&info->client->dev, vol_mv);
+		input_info(true, &info->client->dev,
+				"%s: read done for %d\n", __func__, window_type);
+	} else {
+		input_err(true, &info->client->dev,
+				"%s: fail. voltage is %d\n", __func__, vol_mv);
+	}
+	return;
+
+out:
+	if (count < 50) {
+		schedule_delayed_work(&info->efs_open_work, msecs_to_jiffies(2000));
+		count++;
+ 	} else {
+		input_err(true, &info->client->dev,
+				"%s: retry %d times but can't check efs\n", __func__, count);
+ 	}
+}
 
 static int abov_tk_i2c_read(struct i2c_client *client,
 		u8 reg, u8 *val, unsigned int len)
@@ -356,6 +864,14 @@ static irqreturn_t abov_tk_interrupt(int irq, void *dev_id)
 	
 	menu_data = buf & 0x03;
 	back_data = (buf >> 2) & 0x03;
+
+	if (info->dtdata->reverse_key) {
+		u8 tmp;
+		tmp = menu_data;
+		menu_data = back_data;
+		back_data = tmp;
+	}
+
 	menu_press = !(menu_data % 2);
 	back_press = !(back_data % 2);
 
@@ -486,6 +1002,23 @@ static int touchkey_led_set(struct abov_ft1604_info *info, int data)
 
 	if (info->dtdata->gpio_tkey_led_en >= 0)
 		gpio_direction_output(info->dtdata->gpio_tkey_led_en,data);
+
+	if (info->dtdata->vdd_led > 0) {
+		if(data == 1) {
+			if(regulator_is_enabled(info->dtdata->vdd_led))
+				ret = -1;
+			else
+				ret = regulator_enable(info->dtdata->vdd_led);
+		} else if(data == 0)
+			if(regulator_is_enabled(info->dtdata->vdd_led))
+				ret = regulator_disable(info->dtdata->vdd_led);
+			else
+				ret = -1;
+		else
+			input_err(true, &info->client->dev, "%s data param is wrong value: %d", __func__, data);
+		if(ret < 0)
+			input_err(true, &info->client->dev, "%s fail to set vdd_led(%d), ret(%d)", __func__, data, ret);
+	}
 
 	ret = abov_tk_i2c_write(info->client, ABOV_BTNSTATUS, &cmd, 1);
 	if (ret < 0) {
@@ -1184,6 +1717,249 @@ static ssize_t abov_glove_mode_show(struct device *dev,
 }
 #endif
 
+static ssize_t touchkey_light_version_read(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct abov_ft1604_info *info = dev_get_drvdata(dev);
+	int count;
+	int crc_cal, crc_efs;
+
+	if (efs_read_light_table_version(info) < 0) {
+		count = sprintf(buf, "NG");
+		goto out;
+	} else {
+		if (info->light_version_efs == LIGHT_VERSION) {
+			if (!check_light_table_crc(info)) {
+				count = sprintf(buf, "NG_CS");
+				goto out;
+			}
+		} else {
+			crc_cal = efs_calculate_crc(info);
+			crc_efs = efs_read_crc(info);
+			input_info(true, &info->client->dev,
+					"CRC compare: efs[%d], bin[%d]\n",
+					crc_cal, crc_efs);
+			if (crc_cal != crc_efs) {
+				count = sprintf(buf, "NG_CS");
+				goto out;
+			}
+		}
+	}
+
+	count = sprintf(buf, "%s,%s",
+			info->light_version_full_efs,
+			info->light_version_full_bin);
+out:
+	input_info(true, &info->client->dev, "%s: %s\n", __func__, buf);
+	return count;
+}
+
+static ssize_t touchkey_light_update(struct device *dev,
+		struct device_attribute *attr,
+		const char *buf, size_t size)
+{
+	struct abov_ft1604_info *info = dev_get_drvdata(dev);
+	int ret;
+	int vol_mv;
+	int window_type = read_window_type();
+
+	ret = efs_write(info);
+	if (ret < 0) {
+		input_err(true, &info->client->dev, "%s: fail %d\n", __func__, ret);
+		return -EIO;
+	}
+
+	vol_mv = efs_read_light_table_with_default(info, window_type);
+	if (vol_mv >= LIGHT_VOLTAGE_MIN_VAL) {
+		change_touch_key_led_voltage(&info->client->dev, vol_mv);
+		input_info(true, &info->client->dev,
+				"%s: read done for %d\n", __func__, window_type);
+	} else {
+		input_err(true, &info->client->dev,
+				"%s: fail. voltage is %d\n", __func__, vol_mv);
+	}
+
+	return size;
+}
+
+static ssize_t touchkey_light_id_compare(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct abov_ft1604_info *info = dev_get_drvdata(dev);
+	int count, ret;
+	int window_type = read_window_type();
+	int crc_cal, crc_efs;
+
+	if (window_type < 0) {
+		input_err(true, &info->client->dev,
+				"%s: window_type:%d, NG\n", __func__, window_type);
+		return sprintf(buf, "NG");
+	}
+
+	ret = efs_read_light_table(info, window_type);
+	if (ret < 0) {
+		count = sprintf(buf, "NG");
+	} else {
+		crc_cal = efs_calculate_crc(info);
+		crc_efs = efs_read_crc(info);
+		input_info(true, &info->client->dev,
+				"EFS CRC compare: efs[%d], bin[%d]\n",
+				crc_cal, crc_efs);
+		if (crc_cal != crc_efs) {
+			count = sprintf(buf, "NG_CS");
+		}else{
+			count = sprintf(buf, "OK");
+		}	
+	}
+
+	input_info(true, &info->client->dev,
+			"%s: window_type:%d, %s\n", __func__, window_type, buf);
+	return count;
+}
+
+static char* tokenizer(char* str, char delim)
+{
+	static char* str_addr;
+	char* token = NULL;
+	
+	if (str != NULL)
+		str_addr = str;
+	else if (str_addr == NULL)
+		return 0;
+
+	token = str_addr;
+	while (true) {
+		if (!(*str_addr)) {
+			break;
+		} else if (*str_addr == delim) {
+			*str_addr = '\0';
+			str_addr = str_addr + 1;
+			break;
+		}
+		str_addr++;
+	}
+
+	return token;
+}
+
+static ssize_t touchkey_light_table_write(struct device *dev,
+		struct device_attribute *attr,
+		const char *buf, size_t size)
+{
+	struct abov_ft1604_info *info = dev_get_drvdata(dev);
+	struct light_info table[16];
+	int ret;
+	int vol_mv;
+	int window_type;
+	char *full_version;
+	char data[150] = {0, };
+	int i, crc, crc_cal;
+	char *octa_id;
+	int table_size = 0;
+
+	snprintf(data, sizeof(data), buf);
+
+	input_info(true, &info->client->dev, "%s: %s\n",
+			__func__, data);
+
+	full_version = tokenizer(data, ',');
+	if (!full_version)
+		return -EIO;
+
+	table_size = (int)strlen(full_version) - 8;
+	input_info(true, &info->client->dev, "%s: version:%s size:%d\n",
+			__func__, full_version, table_size);
+			
+	if (table_size < 0 || table_size > 16) {
+		input_err(true, &info->client->dev, "%s: table_size is unavailable\n", __func__);
+		return -EIO;
+	}
+
+	if (kstrtoint(tokenizer(NULL, ','), 0, &crc))
+		return -EIO;
+
+	input_info(true, &info->client->dev, "%s: crc:%d\n",
+			__func__, crc);
+			
+	if (!crc)
+		return -EIO;
+
+	for (i = 0; i < table_size; i++) {
+		octa_id = tokenizer(NULL, '_');
+		if (!octa_id)
+			break;
+		if (octa_id[0] >= 'A')
+			table[i].octa_id = octa_id[0] - 'A' + 0x0A;
+		else
+			table[i].octa_id = octa_id[0] - '0';
+		if (table[i].octa_id < 0 || table[i].octa_id > 0x0F)
+			break;
+		if (kstrtoint(tokenizer(NULL, ','), 0, &table[i].vol_mv))
+			break;
+	}
+
+	if (!table_size) {
+		input_err(true, &info->client->dev, "%s: no data in table\n", __func__);
+		return -ENODATA;
+	}
+
+	for (i = 0; i < table_size; i++) {
+		input_info(true, &info->client->dev, "%s: [%d] %X - %dmv\n",
+				__func__, i, table[i].octa_id, table[i].vol_mv);
+	}
+
+	/* write efs */
+	ret = efs_write_light_table_version(info, full_version);
+	if (ret < 0) {
+		input_err(true, &info->client->dev,
+				"%s: failed to write table ver %s. %d\n",
+				__func__, full_version, ret);
+		return ret;
+	}
+
+	info->light_version_efs = pick_light_table_version(full_version);
+
+	for (i = 0; i < table_size; i++) {
+		ret = efs_write_light_table(info, table[i]);
+		if (ret < 0)
+			break;
+	}
+	if (ret < 0) {
+		input_err(true, &info->client->dev,
+				"%s: failed to write table%d. %d\n",
+				__func__, i, ret);
+		return ret;
+	}
+
+	ret = efs_write_light_table_crc(info, crc);
+	if (ret < 0) {
+		input_err(true, &info->client->dev,
+				"%s: failed to write table crc. %d\n",
+				__func__, ret);
+		return ret;
+	}
+
+	crc_cal = efs_calculate_crc(info);
+	input_info(true, &info->client->dev,
+			"%s: efs crc:%d, caldulated crc:%d\n",
+			__func__, crc, crc_cal);
+	if (crc_cal != crc)
+		return -EIO;
+
+	window_type = read_window_type();
+	vol_mv = efs_read_light_table_with_default(info, window_type);
+	if (vol_mv >= LIGHT_VOLTAGE_MIN_VAL) {
+		change_touch_key_led_voltage(&info->client->dev, vol_mv);
+		input_info(true, &info->client->dev,
+				"%s: read done for %d\n", __func__, window_type);
+	} else {
+		input_err(true, &info->client->dev,
+				"%s: fail. voltage is %d\n", __func__, vol_mv);
+	}
+
+	return size;
+}
+
 static DEVICE_ATTR(touchkey_threshold, S_IRUGO, touchkey_threshold_show, NULL);
 static DEVICE_ATTR(brightness, S_IRUGO | S_IWUSR | S_IWGRP, NULL,
 			touchkey_led_control);
@@ -1205,6 +1981,11 @@ static DEVICE_ATTR(glove_mode, S_IRUGO | S_IWUSR | S_IWGRP,
 static DEVICE_ATTR(boost_level,
 		   S_IWUSR | S_IWGRP, NULL, boost_level_store);
 #endif
+static DEVICE_ATTR(touchkey_brightness, S_IRUGO | S_IWUSR | S_IWGRP, NULL, brightness_control);
+static DEVICE_ATTR(touchkey_light_version, S_IRUGO, touchkey_light_version_read, NULL);
+static DEVICE_ATTR(touchkey_light_update, S_IWUSR | S_IWGRP, NULL, touchkey_light_update);
+static DEVICE_ATTR(touchkey_light_id_compare, S_IRUGO, touchkey_light_id_compare, NULL);
+static DEVICE_ATTR(touchkey_light_table_write, S_IWUSR | S_IWGRP, NULL, touchkey_light_table_write);
 
 static struct attribute *sec_touchkey_attributes[] = {
 	&dev_attr_touchkey_threshold.attr,
@@ -1223,6 +2004,11 @@ static struct attribute *sec_touchkey_attributes[] = {
 #ifdef CONFIG_INPUT_BOOSTER
 	&dev_attr_boost_level.attr,
 #endif
+	&dev_attr_touchkey_brightness.attr,
+	&dev_attr_touchkey_light_version.attr,
+	&dev_attr_touchkey_light_update.attr,
+	&dev_attr_touchkey_light_id_compare.attr,
+	&dev_attr_touchkey_light_table_write.attr,
 	NULL,
 };
 
@@ -1307,22 +2093,68 @@ static int abov_power(struct abov_ft1604_devicetree_data *dtdata, bool on)
 				SECLOG, __func__, on ? "enable" : "disable");
 	}
 
-	if (gpio_is_valid(dtdata->gpio_tkey_led_en))
-		gpio_direction_output(dtdata->gpio_tkey_led_en, on);
-
-	pr_cont("%s %s: %s ", SECLOG, __func__, on ? "on" : "off");
-	if (gpio_is_valid(dtdata->gpio_en))
-		pr_cont("%s vdd_en:%d ", SECLOG, gpio_get_value(dtdata->gpio_en));
-	if (!IS_ERR_OR_NULL(dtdata->vdd_io_vreg))
-		pr_cont("%s vio_reg:%d%s ",
-				SECLOG, regulator_is_enabled(dtdata->vdd_io_vreg),
-				dtdata->vdd_io_alwayson ? "(always on)" : "");
-	if (gpio_is_valid(dtdata->gpio_tkey_led_en))
-		pr_cont("%sled_en:%d ", SECLOG, gpio_get_value(dtdata->gpio_tkey_led_en));
-	pr_cont("\n");
-
+	if (dtdata->gpio_tkey_led_en >= 0) {
+                gpio_direction_output(dtdata->gpio_tkey_led_en, on);
+                pr_info("[TKEY] %s: %s: %d\n", __func__, on ? "on" : "off",
+                        gpio_get_value(dtdata->gpio_tkey_led_en));
+        }
 	return ret;
 }
+
+static void abov_set_ta_status(struct abov_ft1604_info *info)
+{
+//	u8 cmd_data = 0x30;
+	u8 cmd_ta;
+	int ret = 0;
+
+	input_info(true, &info->client->dev, "%s g_ta_connected %d\n", __func__, g_ta_connected);
+
+	if (info->enabled == false)
+	{
+		input_info(true, &info->client->dev, "%s status of ic is off\n", __func__);
+		return;
+	}
+
+	if (g_ta_connected) {
+		cmd_ta = 0x30;
+	}
+	else {
+		cmd_ta = 0x40;
+	}
+
+	ret = abov_tk_i2c_write(info->client, ABOV_TSPTA, &cmd_ta, 1);
+	if (ret < 0) {
+		input_err(true, &info->client->dev, "%s fail(%d)\n", __func__, ret);
+	}
+
+}
+
+#ifdef CONFIG_VBUS_NOTIFIER
+int abov_touchkey_vbus_notification(struct notifier_block *nb,
+		unsigned long cmd, void *data)
+{
+	struct abov_ft1604_info *info = container_of(nb, struct abov_ft1604_info, vbus_nb);
+	vbus_status_t vbus_type = *(vbus_status_t *)data;
+
+	input_info(true, &info->client->dev, "%s cmd=%lu, vbus_type=%d\n", __func__, cmd, vbus_type);
+
+	switch (vbus_type) {
+	case STATUS_VBUS_HIGH:
+		input_info(true, &info->client->dev, "%s : attach\n",__func__);
+		g_ta_connected = true;
+		break;
+	case STATUS_VBUS_LOW:
+		input_info(true, &info->client->dev, "%s : detach\n",__func__);
+		g_ta_connected = false;
+
+		break;
+	default:
+		break;
+	}	
+	abov_set_ta_status(info);	
+	return 0;
+}
+#endif	
 
 static int abov_pinctrl_configure(struct abov_ft1604_info *info, 
 							bool active)
@@ -1391,6 +2223,14 @@ static int abov_gpio_reg_init(struct device *dev,
 	}
 	}
 
+	dtdata->vdd_led = regulator_get(dev, "vdd_led");
+	if (IS_ERR_OR_NULL(dtdata->vdd_led)) {
+		dtdata->vdd_led = NULL;
+		input_err(true, dev, "vdd_led is not used for PMIC LDO.\n");
+	} else {
+		regulator_set_voltage(dtdata->vdd_led, 3300000, 3300000);		
+	}
+	
 	dtdata->vdd_io_vreg = devm_regulator_get(dev, "vddo");
 	if (IS_ERR(dtdata->vdd_io_vreg)){
 		dtdata->vdd_io_vreg = NULL;
@@ -1464,12 +2304,18 @@ static int abov_parse_dt(struct device *dev,
 		input_err(true, dev, "unable to get gpio_tkey_led_en...ignoring\n");
 	}
 
+	dtdata->reverse_key = of_property_read_bool(np, "abov,reverse_key");
+	if(dtdata->reverse_key < 0){
+		dtdata->reverse_key = false;
+	}
+
 	of_property_read_string(np, "abov,firmware_name", &dtdata->fw_name);
 
 	input_info(true, dev, "%s: gpio_en:%d, gpio_int:%d, gpio_scl:%d,"
-		" gpio_sda:%d, gpio_led_en:%d, vdd_io:%d, fw_name: %s\n",
+		" gpio_sda:%d, gpio_led_en:%d, vdd_io:%d, reverse_key:%d, fw_name: %s\n",
 			__func__, dtdata->gpio_en, dtdata->gpio_int, dtdata->gpio_scl,
-			dtdata->gpio_sda, dtdata->gpio_tkey_led_en, dtdata->vdd_io_alwayson, dtdata->fw_name);
+			dtdata->gpio_sda, dtdata->gpio_tkey_led_en, dtdata->vdd_io_alwayson,
+			dtdata->reverse_key, dtdata->fw_name);
 
 	return 0;
 }
@@ -1487,6 +2333,8 @@ static int abov_tk_probe(struct i2c_client *client,
 	struct abov_ft1604_info *info;
 	struct input_dev *input_dev;
 	int ret = 0;
+	int i;
+	char tmp[2] = {0, };
 
 	input_err(true, &client->dev, "%s++\n", __func__);
 
@@ -1618,6 +2466,10 @@ static int abov_tk_probe(struct i2c_client *client,
 	}
 #endif
 
+#ifdef CONFIG_VBUS_NOTIFIER
+	vbus_notifier_register(&info->vbus_nb, abov_touchkey_vbus_notification,
+				VBUS_NOTIFY_DEV_CHARGER);
+#endif
 	info->enabled = true;
 
 	if (!info->dtdata->irq_flag) {
@@ -1664,6 +2516,21 @@ static int abov_tk_probe(struct i2c_client *client,
 	}
 #endif
 
+	INIT_DELAYED_WORK(&info->efs_open_work, touchkey_efs_open_work);
+
+	info->light_table_crc = LIGHT_VERSION;
+	sprintf(info->light_version_full_bin, "T%d.", LIGHT_VERSION);
+	for (i = 0; i < LIGHT_TABLE_MAX; i++) {
+		info->light_table_crc += tkey_light_voltage_table[i].octa_id;
+		info->light_table_crc += tkey_light_voltage_table[i].vol_mv;
+		snprintf(tmp, 2, "%X", tkey_light_voltage_table[i].octa_id);
+		strncat(info->light_version_full_bin, tmp, 1);
+	}
+	input_info(true, &client->dev, "%s: light version of kernel : %s\n",
+			__func__, info->light_version_full_bin);
+
+	schedule_delayed_work(&info->efs_open_work, msecs_to_jiffies(2000));
+
 	input_err(true, &client->dev, "%s done\n", __func__);
 	info->probe_done = true;
 
@@ -1684,6 +2551,9 @@ err_config:
 err_input_alloc:
 	kfree(info);
 err_alloc:
+	if (ret >= 0)
+		ret = -ENODEV;
+	input_err(true, &client->dev, "%s failed %d\n", __func__, ret);
 	return ret;
 
 }
@@ -1742,6 +2612,7 @@ static void abov_tk_shutdown(struct i2c_client *client)
 
 	info->enabled = false;
 
+	cancel_delayed_work(&info->efs_open_work);
 	abov_tk_i2c_write(client, ABOV_BTNSTATUS, &cmd, 1);
 }
 
@@ -1816,6 +2687,9 @@ static int abov_tk_resume(struct device *dev)
 			__func__, (led_data == CMD_LED_ON) ? "on" : "off");
 	}
 	enable_irq(info->irq);
+	
+	if (g_ta_connected)
+		abov_set_ta_status(info);	
 
 	return 0;
 }

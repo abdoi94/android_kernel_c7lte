@@ -317,7 +317,7 @@ struct msm_eeprom_cfg_data {
 	enum eeprom_cfg_type_t cfgtype;
 	uint8_t is_supported;
 	union {
-		char eeprom_name[MAX_SENSOR_NAME];
+		char eeprom_name[MAX_EEPROM_NAME];
 		struct eeprom_get_t get_data;
 		struct eeprom_read_t read_data;
 		struct eeprom_write_t write_data;
@@ -625,6 +625,7 @@ enum msm_camera_led_config_t {
 	MSM_CAMERA_LED_HIGH,
 	MSM_CAMERA_LED_INIT,
 	MSM_CAMERA_LED_RELEASE,
+	MSM_CAMERA_LED_TORCH,
 };
 
 struct msm_camera_led_cfg_t {
@@ -632,7 +633,6 @@ struct msm_camera_led_cfg_t {
 	int32_t torch_current[MAX_LED_TRIGGERS];
 	int32_t flash_current[MAX_LED_TRIGGERS];
 	int32_t flash_duration[MAX_LED_TRIGGERS];
-	int32_t flash_front;
 };
 
 struct msm_flash_init_info_t {
@@ -651,6 +651,7 @@ struct msm_flash_cfg_data_t {
 		struct msm_flash_init_info_t *flash_init_info;
 		struct msm_camera_i2c_reg_setting_array *settings;
 	} cfg;
+	enum flash_position_t flash_position;
 };
 
 /* sensor init structures and enums */
@@ -835,6 +836,7 @@ struct msm_flash_cfg_data_t32 {
 		compat_uptr_t flash_init_info;
 		compat_uptr_t settings;
 	} cfg;
+	enum flash_position_t flash_position;
 };
 
 #define VIDIOC_MSM_ACTUATOR_CFG32 \

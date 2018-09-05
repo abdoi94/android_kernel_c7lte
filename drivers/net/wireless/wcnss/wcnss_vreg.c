@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2015, 2017 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -22,6 +22,13 @@
 #include <linux/list.h>
 #include <linux/slab.h>
 #include <linux/clk.h>
+#include <linux/unistd.h>
+#include <linux/syscalls.h>
+#include <linux/fcntl.h>
+#include <asm/uaccess.h>
+#include <linux/file.h>
+#include <linux/fs.h>
+#include <linux/stat.h>
 
 
 static void __iomem *msm_wcnss_base;
@@ -39,6 +46,7 @@ static int is_power_on;
 
 #define PRONTO_IRIS_REG_READ_OFFSET       0x1134
 #define PRONTO_IRIS_REG_CHIP_ID           0x04
+#define PRONTO_IRIS_REG_CHIP_ID_MASK      0xffff
 /* IRIS card chip ID's */
 #define WCN3660       0x0200
 #define WCN3660A      0x0300
@@ -124,13 +132,13 @@ int xo_auto_detect(u32 reg)
 int wcnss_get_iris_name(char *iris_name)
 {
 	struct wcnss_wlan_config *cfg = NULL;
-	int iris_id;
+	u32 iris_id;
 
 	cfg = wcnss_get_wlan_config();
 
 	if (cfg) {
 		iris_id = cfg->iris_id;
-		iris_id = iris_id >> 16;
+		iris_id = PRONTO_IRIS_REG_CHIP_ID_MASK & (iris_id >> 16);
 	} else {
 		return 1;
 	}
@@ -167,8 +175,9 @@ EXPORT_SYMBOL(wcnss_get_iris_name);
 
 int validate_iris_chip_id(u32 reg)
 {
-	int iris_id;
-	iris_id = reg >> 16;
+	u32 iris_id;
+
+	iris_id = PRONTO_IRIS_REG_CHIP_ID_MASK & (reg >> 16);
 
 	switch (iris_id) {
 	case WCN3660:
@@ -198,6 +207,66 @@ void  wcnss_iris_reset(u32 reg, void __iomem *pmu_conf_reg)
 	/* Reset iris reset bit */
 	reg &= ~WCNSS_PMU_CFG_IRIS_RESET;
 	writel_relaxed(reg, pmu_conf_reg);
+}
+
+static void chipset_version(u32 reg)
+{
+	struct file *file;
+	loff_t pos = 0;
+	int fd;
+	u32 chipset_id;
+	char chipset[15];
+	char path[32] = "/persist/.wifichipset.info";
+
+	mm_segment_t old_fs = get_fs();
+
+	chipset_id = reg >> 16;
+
+	switch (chipset_id) {
+	case WCN3660:
+		memcpy(chipset, "WCN3660", sizeof("WCN3660"));
+		break;
+	case WCN3660A:
+		memcpy(chipset, "WCN3660A", sizeof("WCN3660A"));
+		break;
+	case WCN3660B:
+		memcpy(chipset, "WCN3660B", sizeof("WCN3660B"));
+		break;
+	case WCN3620:
+		memcpy(chipset, "WCN3620", sizeof("WCN3620"));
+		break;
+	case WCN3620A:
+		memcpy(chipset, "WCN3620A", sizeof("WCN3620A"));
+		break;
+	case WCN3610:
+		memcpy(chipset, "WCN3610", sizeof("WCN3610"));
+		break;
+	case WCN3610V1:
+		memcpy(chipset, "WCN3610V1", sizeof("WCN3610V1"));
+		break;
+	}
+
+	pr_info("wcnss: chipset: %s\n", chipset);
+
+	set_fs(KERNEL_DS);
+	fd = sys_open(path, O_RDWR | O_CREAT | O_TRUNC, 0644);
+
+	if(fd >=0){
+		file = fget(fd);
+		sys_fchmod(fd, 0644);
+
+		if(file){
+			vfs_write(file, chipset, strlen(chipset), &pos);
+			fput(file);
+		}
+		sys_close(fd);
+	}
+	else {
+		pr_err("Couldn't open (%s)\n", path);
+	}
+	set_fs(old_fs);
+
+	return;
 }
 
 static int
@@ -295,7 +364,7 @@ configure_iris_xo(struct device *dev,
 
 				iris_reg = readl_relaxed(iris_read_reg);
 				pr_info("wcnss: IRIS Reg: %08x\n", iris_reg);
-
+                chipset_version(iris_reg);
 				if (validate_iris_chip_id(iris_reg) && i >= 4) {
 					pr_info("wcnss: IRIS Card absent/invalid\n");
 					auto_detect = WCNSS_XO_INVALID;
@@ -417,6 +486,11 @@ static void wcnss_vregs_off(struct vregs_info regulators[], uint size,
 		if (regulators[i].state == VREG_NULL_CONFIG)
 			continue;
 
+		if (cfg->wcn_external_gpio_support) {
+			if (!memcmp(regulators[i].name, VDD_PA, sizeof(VDD_PA)))
+				continue;
+		}
+
 		/* Remove PWM mode */
 		if (regulators[i].state & VREG_OPTIMUM_MODE_MASK) {
 			rc = regulator_set_optimum_mode(
@@ -478,7 +552,12 @@ static int wcnss_vregs_on(struct device *dev,
 	}
 
 	for (i = 0; i < size; i++) {
-			/* Get regulator source */
+		if (cfg->wcn_external_gpio_support) {
+			if (!memcmp(regulators[i].name, VDD_PA, sizeof(VDD_PA)))
+				continue;
+		}
+
+		/* Get regulator source */
 		regulators[i].regulator =
 			regulator_get(dev, regulators[i].name);
 		if (IS_ERR(regulators[i].regulator)) {

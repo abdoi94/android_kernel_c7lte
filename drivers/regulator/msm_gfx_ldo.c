@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015-2016, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2015-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -45,6 +45,7 @@
 #define PWRSWITCH_CTRL_REG		0x1C
 #define LDO_CLAMP_IO_BIT		BIT(31)
 #define CPR_BYPASS_IN_LDO_MODE_BIT	BIT(30)
+#define EN_LDOAP_CTRL_CPR_BIT		BIT(29)
 #define PWR_SRC_SEL_BIT			BIT(9)
 #define ACK_SW_OVR_BIT			BIT(8)
 #define LDO_PREON_SW_OVR_BIT		BIT(7)
@@ -62,7 +63,7 @@
 #define LDO_READY_BIT			BIT(2)
 #define BHS_EN_REST_ACK_BIT		BIT(1)
 
-#define MIN_LDO_VOLTAGE			345000
+#define MIN_LDO_VOLTAGE			375000
 #define MAX_LDO_VOLTAGE			980000
 #define LDO_STEP_VOLATGE		5000
 
@@ -318,23 +319,23 @@ static int enable_ldo_mode(struct msm_gfx_ldo *ldo_vreg)
 
 	/* Move BHS under SW control */
 	ctl |= BHS_UNDER_SW_CTL;
-	writel_relaxed(ctl, ldo_vreg + PWRSWITCH_CTRL_REG);
+	writel_relaxed(ctl, ldo_vreg->ldo_base + PWRSWITCH_CTRL_REG);
 
 	/* Set LDO under gdsc control */
 	ctl &= ~LDO_UNDER_SW_CTRL_BIT;
-	writel_relaxed(ctl, ldo_vreg + PWRSWITCH_CTRL_REG);
+	writel_relaxed(ctl, ldo_vreg->ldo_base + PWRSWITCH_CTRL_REG);
 
 	/* enable hw_pre-on to gdsc */
 	ctl |= LDO_PREON_SW_OVR_BIT;
-	writel_relaxed(ctl, ldo_vreg + PWRSWITCH_CTRL_REG);
+	writel_relaxed(ctl, ldo_vreg->ldo_base + PWRSWITCH_CTRL_REG);
 
 	/* remove LDO bypass */
 	ctl &= ~LDO_BYPASS_BIT;
-	writel_relaxed(ctl, ldo_vreg + PWRSWITCH_CTRL_REG);
+	writel_relaxed(ctl, ldo_vreg->ldo_base + PWRSWITCH_CTRL_REG);
 
 	/* set power-source as LDO */
 	ctl |= PWR_SRC_SEL_BIT;
-	writel_relaxed(ctl, ldo_vreg + PWRSWITCH_CTRL_REG);
+	writel_relaxed(ctl, ldo_vreg->ldo_base + PWRSWITCH_CTRL_REG);
 
 	/* clear fake-sw ack to gdsc */
 	ctl &= ~ACK_SW_OVR_BIT;
@@ -342,7 +343,7 @@ static int enable_ldo_mode(struct msm_gfx_ldo *ldo_vreg)
 
 	/* put CPR in bypass mode */
 	ctl |= CPR_BYPASS_IN_LDO_MODE_BIT;
-	writel_relaxed(ctl, ldo_vreg + PWRSWITCH_CTRL_REG);
+	writel_relaxed(ctl, ldo_vreg->ldo_base + PWRSWITCH_CTRL_REG);
 
 	/* complete all writes */
 	mb();
@@ -397,6 +398,15 @@ static int msm_gfx_ldo_enable(struct regulator_dev *rdev)
 				ldo_vreg->corner + MIN_CORNER_OFFSET);
 
 	if (ldo_vreg->vdd_cx) {
+		rc = regulator_set_voltage(ldo_vreg->vdd_cx,
+			ldo_vreg->vdd_cx_corner_map[ldo_vreg->corner],
+			INT_MAX);
+		if (rc) {
+			pr_err("Unable to set CX for corner %d rc=%d\n",
+				ldo_vreg->corner + MIN_CORNER_OFFSET, rc);
+			goto fail;
+		}
+
 		rc = regulator_enable(ldo_vreg->vdd_cx);
 		if (rc) {
 			pr_err("regulator_enable: vdd_cx: failed rc=%d\n", rc);
@@ -534,7 +544,7 @@ static int switch_mode_to_ldo(struct msm_gfx_ldo *ldo_vreg, int new_corner)
 
 	/* remove LDO bypass */
 	ctl &= ~LDO_BYPASS_BIT;
-	writel_relaxed(ctl, ldo_vreg + PWRSWITCH_CTRL_REG);
+	writel_relaxed(ctl, ldo_vreg->ldo_base + PWRSWITCH_CTRL_REG);
 
 	/* expose LDO to gdsc */
 	ctl &= ~ACK_SW_OVR_BIT;
@@ -645,17 +655,6 @@ static int msm_gfx_ldo_set_voltage(struct regulator_dev *rdev,
 	else if (corner < ldo_vreg->corner)
 		dir = DOWN;
 
-	if (ldo_vreg->vdd_cx) {
-		rc = regulator_set_voltage(ldo_vreg->vdd_cx,
-			ldo_vreg->vdd_cx_corner_map[corner],
-			INT_MAX);
-		if (rc) {
-			pr_err("Unable to set CX for corner %d rc=%d\n",
-					corner + MIN_CORNER_OFFSET, rc);
-			goto done;
-		}
-	}
-
 	if (ldo_vreg->mem_acc_vreg && dir == DOWN) {
 		mem_acc_corner = ldo_vreg->mem_acc_corner_map[corner];
 		rc = regulator_set_voltage(ldo_vreg->mem_acc_vreg,
@@ -665,6 +664,17 @@ static int msm_gfx_ldo_set_voltage(struct regulator_dev *rdev,
 	if (!ldo_vreg->vreg_enabled) {
 		ldo_vreg->corner = corner;
 		goto done;
+	}
+
+	if (ldo_vreg->vdd_cx) {
+		rc = regulator_set_voltage(ldo_vreg->vdd_cx,
+			ldo_vreg->vdd_cx_corner_map[corner],
+			INT_MAX);
+		if (rc) {
+			pr_err("Unable to set CX for corner %d rc=%d\n",
+					corner + MIN_CORNER_OFFSET, rc);
+			goto done;
+		}
 	}
 
 	new_mode = get_operating_mode(ldo_vreg, corner);
@@ -733,6 +743,49 @@ static struct regulator_ops msm_gfx_ldo_corner_ops = {
 	.get_voltage	= msm_gfx_ldo_get_voltage,
 };
 
+static int msm_gfx_ldo_adjust_init_voltage(struct msm_gfx_ldo *ldo_vreg)
+{
+	int rc, len, size, i;
+	u32 *volt_adjust;
+	struct device_node *of_node = ldo_vreg->dev->of_node;
+	char *prop_name = "qcom,ldo-init-voltage-adjustment";
+
+	if (!of_find_property(of_node, prop_name, &len)) {
+		/* No initial voltage adjustment needed. */
+		return 0;
+	}
+
+	size = len / sizeof(u32);
+	if (size != ldo_vreg->num_ldo_corners) {
+		pr_err("%s length=%d is invalid: required:%d\n",
+				prop_name, size, ldo_vreg->num_ldo_corners);
+		return -EINVAL;
+	}
+
+	volt_adjust = devm_kcalloc(ldo_vreg->dev, size, sizeof(*volt_adjust),
+								GFP_KERNEL);
+	if (!volt_adjust)
+		return -ENOMEM;
+
+	rc = of_property_read_u32_array(of_node, prop_name, volt_adjust, size);
+	if (rc) {
+		pr_err("failed to read %s property rc=%d\n", prop_name, rc);
+		return rc;
+	}
+
+	for (i = 0; i < ldo_vreg->num_corners; i++) {
+		if (volt_adjust[i]) {
+			ldo_vreg->open_loop_volt[i] += volt_adjust[i];
+			pr_info("adjusted the open-loop voltage[%d] %d -> %d\n",
+				i + MIN_CORNER_OFFSET,
+				ldo_vreg->open_loop_volt[i] - volt_adjust[i],
+				ldo_vreg->open_loop_volt[i]);
+		}
+	}
+
+	return 0;
+}
+
 static int msm_gfx_ldo_voltage_init(struct msm_gfx_ldo *ldo_vreg)
 {
 	struct device_node *of_node = ldo_vreg->dev->of_node;
@@ -784,6 +837,12 @@ static int msm_gfx_ldo_voltage_init(struct msm_gfx_ldo *ldo_vreg)
 					GFX_LDO_FUSE_SIZE);
 		pr_info("LDO corner %d: target-volt = %d uV\n",
 			i + MIN_CORNER_OFFSET, ldo_vreg->open_loop_volt[i]);
+	}
+
+	rc = msm_gfx_ldo_adjust_init_voltage(ldo_vreg);
+	if (rc) {
+		pr_err("Unable to adjust init voltages rc=%d\n", rc);
+		return rc;
 	}
 
 	for (i = 0; i < ldo_vreg->num_ldo_corners; i++) {
@@ -921,9 +980,10 @@ static int msm_gfx_ldo_init(struct platform_device *pdev,
 
 	/* HW initialization */
 
-	/* clear clamp_io */
+	/* clear clamp_io, enable CPR in auto-bypass*/
 	ctl = readl_relaxed(ldo_vreg->ldo_base + PWRSWITCH_CTRL_REG);
 	ctl &= ~LDO_CLAMP_IO_BIT;
+	ctl |= EN_LDOAP_CTRL_CPR_BIT;
 	writel_relaxed(ctl, ldo_vreg->ldo_base + PWRSWITCH_CTRL_REG);
 
 	i = 0;

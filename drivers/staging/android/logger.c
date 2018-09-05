@@ -571,6 +571,78 @@ static ssize_t logger_aio_write(struct kiocb *iocb, const struct iovec *iov,
 	return ret;
 }
 
+/*
+ * logger_write_iter - our write method, implementing support for write(),
+ * writev(), and aio_write(). Writes are our fast path, and we try to optimize
+ * them above all else.
+ */
+static ssize_t logger_write_iter(struct kiocb *iocb, struct iov_iter *from)
+{
+	struct logger_log *log = file_get_log(iocb->ki_filp);
+	struct logger_entry header;
+	struct timespec now;
+	size_t len, count, w_off;
+
+	count = min_t(size_t, iocb->ki_nbytes, LOGGER_ENTRY_MAX_PAYLOAD);
+
+	now = current_kernel_time();
+
+	header.pid = current->tgid;
+	header.tid = current->pid;
+	header.sec = now.tv_sec;
+	header.nsec = now.tv_nsec;
+	header.euid = current_euid();
+	header.len = count;
+	header.hdr_size = sizeof(struct logger_entry);
+
+	/* null writes succeed, return zero */
+	if (unlikely(!header.len))
+		return 0;
+
+	mutex_lock(&log->mutex);
+
+	/*
+	 * Fix up any readers, pulling them forward to the first readable
+	 * entry after (what will be) the new write offset. We do this now
+	 * because if we partially fail, we can end up with clobbered log
+	 * entries that encroach on readable buffer.
+	 */
+	fix_up_readers(log, sizeof(struct logger_entry) + header.len);
+
+	len = min(sizeof(header), log->size - log->w_off);
+	memcpy(log->buffer + log->w_off, &header, len);
+	memcpy(log->buffer, (char *)&header + len, sizeof(header) - len);
+
+	/* Work with a copy until we are ready to commit the whole entry */
+	w_off =  logger_offset(log, log->w_off + sizeof(struct logger_entry));
+
+	len = min(count, log->size - w_off);
+
+	if (copy_from_iter(log->buffer + w_off, len, from) != len) {
+		/*
+		 * Note that by not updating log->w_off, this abandons the
+		 * portion of the new entry that *was* successfully
+		 * copied, just above.  This is intentional to avoid
+		 * message corruption from missing fragments.
+		 */
+		mutex_unlock(&log->mutex);
+		return -EFAULT;
+	}
+
+	if (copy_from_iter(log->buffer, count - len, from) != count - len) {
+		mutex_unlock(&log->mutex);
+		return -EFAULT;
+	}
+
+	log->w_off = logger_offset(log, w_off + count);
+	mutex_unlock(&log->mutex);
+
+	/* wake up any blocked readers */
+	wake_up_interruptible(&log->wq);
+
+	return len;
+}
+
 static struct logger_log *get_log_from_minor(int minor)
 {
 	struct logger_log *log;
@@ -684,6 +756,7 @@ static unsigned int logger_poll(struct file *file, poll_table *wait)
 static long logger_set_version(struct logger_reader *reader, void __user *arg)
 {
 	int version;
+
 	if (copy_from_user(&version, arg, sizeof(int)))
 		return -EFAULT;
 
@@ -777,6 +850,7 @@ static const struct file_operations logger_fops = {
 	.owner = THIS_MODULE,
 	.read = logger_read,
 	.aio_write = logger_aio_write,
+	.write_iter = logger_write_iter,
 	.poll = logger_poll,
 	.unlocked_ioctl = logger_ioctl,
 	.compat_ioctl = logger_ioctl,
@@ -921,13 +995,16 @@ static inline int __init __create_log(char *log_name, int size)
 	if (unlikely(ret)) {
 		pr_err("failed to register misc device for log '%s'!\n",
 				log->misc.name);
-		goto out_free_log;
+		goto out_free_misc_name;
 	}
 
 	pr_info("created %luK log '%s'\n",
 		(unsigned long) log->size >> 10, log->misc.name);
 
 	return 0;
+
+out_free_misc_name:
+	kfree(log->misc.name);
 
 out_free_log:
 	kfree(log);

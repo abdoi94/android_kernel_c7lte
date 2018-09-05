@@ -104,7 +104,7 @@ struct snd_sysclk_info {
 	int clk_id;
 	int fll_in;
 	int fll_out;
-};				  
+};
 
 struct snd_sysclk_info rt5659_sysclk = {
 	.clk_id = RT5659_PLL1_S_MCLK,
@@ -450,7 +450,7 @@ static void msm8952_rt5659_set_mclk(struct snd_soc_card *card, int enable)
 
 	dev_info(card->dev, "%s enable %d\n", __func__, enable);
 	if (enable) {
-		ret = clk_set_rate(pdata->rt5659_ext_clk, 
+		ret = clk_set_rate(pdata->rt5659_ext_clk,
 			(unsigned long)pdata->mclk_freq);
 		if (ret < 0) {
 			dev_err(card->dev, "%s: Can't set ext-mclk rate %dHz (%d)\n",
@@ -487,22 +487,6 @@ const struct snd_soc_dapm_widget rt5659_dapm_widgets[] = {
 	SND_SOC_DAPM_MIC("Headset Mic", NULL),
 	SND_SOC_DAPM_MIC("Main Mic", NULL),
 	SND_SOC_DAPM_MIC("Sub Mic", NULL),
-};
-
-const struct snd_soc_dapm_route rt5659_dapm_routes[] = {
-	{ "HP", NULL, "HPOL" },
-	{ "HP", NULL, "HPOR" },
-	{ "RCV", NULL, "MONOOUT" },
-	{ "SPK", NULL, "SPOL" },
-	{ "SPK", NULL, "SPOR" },
-	{ "IN1P", NULL, "Headset Mic" },
-	{ "IN1N", NULL, "Headset Mic" },
-	{ "IN3P", NULL, "MICBIAS3" },
-	{ "IN3P", NULL, "Sub Mic" },
-	{ "IN3N", NULL, "Sub Mic" },
-	{ "IN4P", NULL, "MICBIAS2" },
-	{ "IN4P", NULL, "Main Mic" },
-	{ "IN4N", NULL, "Main Mic" },
 };
 
 static int msm_rt5659_aif1_mi2s_snd_hw_params(struct snd_pcm_substream *substream,
@@ -705,11 +689,10 @@ static int msm_mi2s_sclk_ctl(struct snd_pcm_substream *substream, bool enable)
 				mi2s_rx_clk.enable = enable;
 				mi2s_rx_clk.clk_id =
 						msm8952_get_clk_id(port_id);
-				
+
 				mi2s_rx_clk.clk_freq_in_hz =
 					msm8952_get_mi2s_bit_clock(mi2s_rx_bit_format,
 						mi2s_rx_sample_rate);
-				
 				ret = afe_set_lpass_clock_v2(port_id,
 							&mi2s_rx_clk);
 			}
@@ -908,7 +891,7 @@ static int mi2s_rx_sample_rate_get(struct snd_kcontrol *kcontrol,
 		sample_rate_val = 2;
 		break;
 	case SAMPLING_RATE_48KHZ:
-	default:		
+	default:
 		sample_rate_val = 0;
 		break;
 	}
@@ -922,7 +905,7 @@ static int mi2s_rx_sample_rate_put(struct snd_kcontrol *kcontrol,
 	struct snd_ctl_elem_value *ucontrol)
 {
 	int sample_rate_index = 0;
-	
+
 	sample_rate_index = ucontrol->value.integer.value[0];
 
 	switch (sample_rate_index) {
@@ -937,7 +920,7 @@ static int mi2s_rx_sample_rate_put(struct snd_kcontrol *kcontrol,
 		mi2s_rx_sample_rate = SAMPLING_RATE_48KHZ;
 		break;
 	}
-	
+
 	pr_debug("%s: sample_rate = %d\n", __func__, mi2s_rx_sample_rate);
 
 	return 0;
@@ -1984,7 +1967,7 @@ static int msm8952_rt5659_start_sysclk(struct snd_soc_card *card)
 	msm8952_rt5659_set_mclk(card, 1);
 
 	ret = snd_soc_dai_set_pll(rt5659_sysclk.codec_dai,
-			0, rt5659_sysclk.clk_id, 
+			0, rt5659_sysclk.clk_id,
 			rt5659_sysclk.fll_in, rt5659_sysclk.fll_out);
 	if (ret < 0) {
 		dev_err(card->dev, "codec_dai pll not set\n");
@@ -2947,13 +2930,17 @@ static struct snd_soc_dai_link msm8952_dai[] = {
 		.cpu_dai_name	= "MultiMedia17",
 		.platform_name	= "msm-pcm-dsp.1",
 		.dynamic = 1,
+		.dpcm_playback = 1,
+		.dpcm_capture = 1,
+		.async_ops = ASYNC_DPCM_SND_SOC_PREPARE |
+			ASYNC_DPCM_SND_SOC_HW_PARAMS,
+		.codec_dai_name = "snd-soc-dummy-dai",
+		.codec_name = "snd-soc-dummy",
 		.trigger = {SND_SOC_DPCM_TRIGGER_POST,
 				SND_SOC_DPCM_TRIGGER_POST},
 		.ignore_suspend = 1,
 		/* this dainlink has playback support */
 		.ignore_pmdown_time = 1,
-		.codec_dai_name = "snd-soc-dummy-dai",
-		.codec_name = "snd-soc-dummy",
 		.be_id = MSM_FRONTEND_DAI_MULTIMEDIA17,
 	},
 #endif
@@ -3008,7 +2995,7 @@ static struct snd_soc_dai_link msm8952_dai[] = {
 		.codec_name = "rt5659",
 		.no_host_mode = SND_SOC_DAI_LINK_NO_HOST,
 		.ops = &msm8952_dummy_mi2s_be_ops,
-		.ignore_suspend = 1,		
+		.ignore_suspend = 1,
 	},
 };
 
@@ -3296,13 +3283,18 @@ static int msm_get_adc(void)
 			__func__, pdata->mpp_ch_scale[2]);
 
 #if defined(CONFIG_SEC_MPP_SHARE)
-	sec_mpp_mux_control(EAR_ADC_MUX_SEL_NUM, SEC_MUX_SEL_EAR_ADC, 1);
-#endif
-	earjack_vadc = qpnp_get_vadc(codec->component.card->dev, "earjack-read");
+	if (!pdata->mpp_standalone_mode)
+		sec_mpp_mux_control(EAR_ADC_MUX_SEL_NUM,
+			SEC_MUX_SEL_EAR_ADC, 1);
+#endif /* CONFIG_SEC_MPP_SHARE */
+	earjack_vadc =
+		qpnp_get_vadc(codec->component.card->dev, "earjack-read");
 	qpnp_vadc_read(earjack_vadc,  mpp_ch, &result);
 #if defined(CONFIG_SEC_MPP_SHARE)
-	sec_mpp_mux_control(EAR_ADC_MUX_SEL_NUM, SEC_MUX_SEL_EAR_ADC, 0);
-#endif
+	if (!pdata->mpp_standalone_mode)
+		sec_mpp_mux_control(EAR_ADC_MUX_SEL_NUM,
+			SEC_MUX_SEL_EAR_ADC, 0);
+#endif /* CONFIG_SEC_MPP_SHARE */
 
 	/* Get voltage in microvolts */
 	adc_val = ((int)result.physical)/1000;
@@ -3409,7 +3401,6 @@ static int msm8952_rt5659_asoc_machine_probe(struct platform_device *pdev)
 		pr_err("Error reading dtsi file for gpios\n");
 		goto err;
 	}
-
 #endif
 
 	muxsel = platform_get_resource_byname(pdev, IORESOURCE_MEM,
@@ -3622,6 +3613,11 @@ static int msm8952_rt5659_asoc_machine_probe(struct platform_device *pdev)
 	}
 
 #ifdef CONFIG_SAMSUNG_JACK
+#ifdef CONFIG_SEC_MPP_SHARE
+	pdata->mpp_standalone_mode = of_property_read_bool(pdev->dev.of_node,
+		"qcom,mpp-standalone-mode");
+#endif /* CONFIG_SEC_MPP_SHARE */
+
 	ret = of_property_read_u32_array(pdev->dev.of_node,
 		"qcom,mpp-channel-scaling", pdata->mpp_ch_scale, 3);
 	if (ret < 0) {

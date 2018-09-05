@@ -1,11 +1,11 @@
 /*
  * MELFAS MIP4 Touchkey
  *
- * Copyright (C) 2015 MELFAS Inc.
+ * Copyright (C) 2016 MELFAS Inc.
  *
  * mip4_debug.c : Debug functions (Optional)
  *
- * Version : 2016.03.15
+ * Version : 2016.06.30
  */
 
 #include "mip4.h"
@@ -20,11 +20,11 @@ static ssize_t mip4_tk_dev_fs_read(struct file *fp, char *rbuf, size_t cnt, loff
 	struct mip4_tk_info *info = fp->private_data;
 	int ret = 0;
 
-	//dev_dbg(&info->client->dev, "%s [START]\n", __func__);
+	//input_dbg(true, &info->client->dev, "%s [START]\n", __func__);
 
 	ret = copy_to_user(rbuf, info->dev_fs_buf, cnt);
 
-	//dev_dbg(&info->client->dev, "%s [DONE]\n", __func__);
+	//input_dbg(true, &info->client->dev, "%s [DONE]\n", __func__);
 
 	return ret;
 }
@@ -39,12 +39,12 @@ static ssize_t mip4_tk_dev_fs_write(struct file *fp, const char *wbuf, size_t cn
 	int ret = 0;
 	int cmd = 0;
 
-	//dev_dbg(&info->client->dev, "%s [START]\n", __func__);
+	//input_dbg(true, &info->client->dev, "%s [START]\n", __func__);
 
 	buf = kzalloc(cnt + 1, GFP_KERNEL);
 
 	if ((buf == NULL) || copy_from_user(buf, wbuf, cnt)) {
-		dev_err(&info->client->dev, "%s [ERROR] copy_from_user\n", __func__);
+		input_err(true, &info->client->dev, "%s [ERROR] copy_from_user\n", __func__);
 		ret = -EIO;
 		goto exit;
 	}
@@ -52,14 +52,14 @@ static ssize_t mip4_tk_dev_fs_write(struct file *fp, const char *wbuf, size_t cn
 	cmd = buf[cnt - 1];
 
 	if (cmd == 1) {
-		//dev_dbg(&info->client->dev, "%s - cmd[%d] w_len[%d] r_len[%d]\n", __func__, cmd, (cnt - 2), buf[cnt - 2]);
+		//input_dbg(true, &info->client->dev, "%s - cmd[%d] w_len[%d] r_len[%d]\n", __func__, cmd, (cnt - 2), buf[cnt - 2]);
 		if (mip4_tk_i2c_read(info, buf, (cnt - 2), info->dev_fs_buf, buf[cnt - 2])) {
-			dev_err(&info->client->dev, "%s [ERROR] mip4_tk_i2c_read\n", __func__);
+			input_err(true, &info->client->dev, "%s [ERROR] mip4_tk_i2c_read\n", __func__);
 		}
 	} else if (cmd == 2) {
-		//dev_dbg(&info->client->dev, "%s - cmd[%d] w_len[%d]\n", __func__, cmd, (cnt - 1));
+		//input_dbg(true, &info->client->dev, "%s - cmd[%d] w_len[%d]\n", __func__, cmd, (cnt - 1));
 		if (mip4_tk_i2c_write(info, buf, (cnt - 1))) {
-			dev_err(&info->client->dev, "%s [ERROR] mip4_tk_i2c_write\n", __func__);
+			input_err(true, &info->client->dev, "%s [ERROR] mip4_tk_i2c_write\n", __func__);
 		}
 	} else {
 		goto exit;
@@ -67,7 +67,7 @@ static ssize_t mip4_tk_dev_fs_write(struct file *fp, const char *wbuf, size_t cn
 
 exit:
 	kfree(buf);
-	//dev_dbg(&info->client->dev, "%s [DONE]\n", __func__);
+	//input_dbg(true, &info->client->dev, "%s [DONE]\n", __func__);
 	return ret;
 }
 
@@ -78,13 +78,13 @@ static int mip4_tk_dev_fs_open(struct inode *node, struct file *fp)
 {
 	struct mip4_tk_info *info = container_of(node->i_cdev, struct mip4_tk_info, cdev);
 
-	//dev_dbg(&info->client->dev, "%s [START]\n", __func__);
+	//input_dbg(true, &info->client->dev, "%s [START]\n", __func__);
 
 	fp->private_data = info;
 
 	info->dev_fs_buf = kzalloc(1024 * 4, GFP_KERNEL);
 
-	//dev_dbg(&info->client->dev, "%s [DONE]\n", __func__);
+	//input_dbg(true, &info->client->dev, "%s [DONE]\n", __func__);
 
 	return 0;
 }
@@ -96,11 +96,11 @@ static int mip4_tk_dev_fs_release(struct inode *node, struct file *fp)
 {
 	struct mip4_tk_info *info = fp->private_data;
 
-	//dev_dbg(&info->client->dev, "%s [START]\n", __func__);
+	//input_dbg(true, &info->client->dev, "%s [START]\n", __func__);
 
 	kfree(info->dev_fs_buf);
 
-	//dev_dbg(&info->client->dev, "%s [DONE]\n", __func__);
+	//input_dbg(true, &info->client->dev, "%s [DONE]\n", __func__);
 
 	return 0;
 }
@@ -124,10 +124,10 @@ int mip4_tk_dev_create(struct mip4_tk_info *info)
 	struct i2c_client *client = info->client;
 	int ret = 0;
 
-	dev_dbg(&info->client->dev, "%s [START]\n", __func__);
+	input_dbg(true, &info->client->dev, "%s [START]\n", __func__);
 
 	if (alloc_chrdev_region(&info->mip4_tk_dev, 0, 1, MIP_DEV_NAME)) {
-		dev_err(&client->dev, "%s [ERROR] alloc_chrdev_region\n", __func__);
+		input_err(true, &client->dev, "%s [ERROR] alloc_chrdev_region\n", __func__);
 		ret = -ENOMEM;
 		goto error;
 	}
@@ -136,16 +136,16 @@ int mip4_tk_dev_create(struct mip4_tk_info *info)
 	info->cdev.owner = THIS_MODULE;
 
 	if (cdev_add(&info->cdev, info->mip4_tk_dev, 1)) {
-		dev_err(&client->dev, "%s [ERROR] cdev_add\n", __func__);
+		input_err(true, &client->dev, "%s [ERROR] cdev_add\n", __func__);
 		ret = -EIO;
 		goto error;
 	}
 
-	dev_dbg(&info->client->dev, "%s [DONE]\n", __func__);
+	input_dbg(true, &info->client->dev, "%s [DONE]\n", __func__);
 	return 0;
 
 error:
-	dev_err(&info->client->dev, "%s [ERROR]\n", __func__);
+	input_err(true, &info->client->dev, "%s [ERROR]\n", __func__);
 	return 0;
 }
 
@@ -180,7 +180,7 @@ static int mip4_tk_proc_table_data(struct mip4_tk_info *info, u8 size, u8 data_t
 
 	memset(data, 0, 10);
 
-	dev_dbg(&info->client->dev, "%s [START]\n", __func__);
+	input_dbg(true, &info->client->dev, "%s [START]\n", __func__);
 
 	//set axis
 	if (rotate == 0) {
@@ -200,7 +200,7 @@ static int mip4_tk_proc_table_data(struct mip4_tk_info *info, u8 size, u8 data_t
 		}
 		flip_x = true;
 	} else {
-		dev_err(&info->client->dev, "%s [ERROR] rotate [%d]\n", __func__, rotate);
+		input_err(true, &info->client->dev, "%s [ERROR] rotate [%d]\n", __func__, rotate);
 		goto error;
 	}
 
@@ -215,7 +215,7 @@ static int mip4_tk_proc_table_data(struct mip4_tk_info *info, u8 size, u8 data_t
 		wbuf[0] = (buf_addr >> 8) & 0xFF;
 		wbuf[1] = buf_addr & 0xFF;
 		if (mip4_tk_i2c_read(info, wbuf, 2, rbuf, size)) {
-			dev_err(&info->client->dev, "%s [ERROR] Read data buffer\n", __func__);
+			input_err(true, &info->client->dev, "%s [ERROR] Read data buffer\n", __func__);
 			goto error;
 		}
 
@@ -235,7 +235,7 @@ static int mip4_tk_proc_table_data(struct mip4_tk_info *info, u8 size, u8 data_t
 				} else if (data_size == 4) {
 					uValue = (u32)(rbuf[data_size * i_col] | (rbuf[data_size * i_col + 1] << 8) | (rbuf[data_size * i_col + 2] << 16) | (rbuf[data_size * i_col + 3] << 24));
 				} else {
-					dev_err(&info->client->dev, "%s [ERROR] data_size [%d]\n", __func__, data_size);
+					input_err(true, &info->client->dev, "%s [ERROR] data_size [%d]\n", __func__, data_size);
 					goto error;
 				}
 				value = (int)uValue;
@@ -248,7 +248,7 @@ static int mip4_tk_proc_table_data(struct mip4_tk_info *info, u8 size, u8 data_t
 				} else if (data_size == 4) {
 					sValue = (s32)(rbuf[data_size * i_col] | (rbuf[data_size * i_col + 1] << 8) | (rbuf[data_size * i_col + 2] << 16) | (rbuf[data_size * i_col + 3] << 24));
 				} else {
-					dev_err(&info->client->dev, "%s [ERROR] data_size [%d]\n", __func__, data_size);
+					input_err(true, &info->client->dev, "%s [ERROR] data_size [%d]\n", __func__, data_size);
 					goto error;
 				}
 				value = (int)sValue;
@@ -266,7 +266,7 @@ static int mip4_tk_proc_table_data(struct mip4_tk_info *info, u8 size, u8 data_t
 				}
 				break;
 			default:
-				dev_err(&info->client->dev, "%s [ERROR] rotate [%d]\n", __func__, rotate);
+				input_err(true, &info->client->dev, "%s [ERROR] rotate [%d]\n", __func__, rotate);
 				goto error;
 				break;
 			}
@@ -305,7 +305,7 @@ static int mip4_tk_proc_table_data(struct mip4_tk_info *info, u8 size, u8 data_t
 		}
 		break;
 	default:
-		dev_err(&info->client->dev, "%s [ERROR] data_size [%d]\n", __func__, data_size);
+		input_err(true, &info->client->dev, "%s [ERROR] data_size [%d]\n", __func__, data_size);
 		goto error;
 		break;
 	}
@@ -347,10 +347,10 @@ static int mip4_tk_proc_table_data(struct mip4_tk_info *info, u8 size, u8 data_t
 				break;
 			case 4:
 				printk(" %6d", info->image_buf[i_y * max_x + i_x]);
-				sprintf(data, " %6u", info->image_buf[i_y * max_x + i_x]);
+				sprintf(data, " %6d", info->image_buf[i_y * max_x + i_x]);
 				break;
 			default:
-				dev_err(&info->client->dev, "%s [ERROR] data_size [%d]\n", __func__, data_size);
+				input_err(true, &info->client->dev, "%s [ERROR] data_size [%d]\n", __func__, data_size);
 				goto error;
 				break;
 			}
@@ -370,11 +370,11 @@ static int mip4_tk_proc_table_data(struct mip4_tk_info *info, u8 size, u8 data_t
 	strcat(info->print_buf, data);
 	memset(data, 0, 10);
 
-	dev_dbg(&info->client->dev, "%s [DONE]\n", __func__);
+	input_dbg(true, &info->client->dev, "%s [DONE]\n", __func__);
 	return 0;
 
 error:
-	dev_err(&info->client->dev, "%s [ERROR]\n", __func__);
+	input_err(true, &info->client->dev, "%s [ERROR]\n", __func__);
 	return 1;
 }
 
@@ -400,8 +400,8 @@ int mip4_tk_run_test(struct mip4_tk_info *info, u8 test_type)
 	u8 buf_addr_l;
 	int ret = 0;
 
-	dev_dbg(&info->client->dev, "%s [START]\n", __func__);
-	dev_dbg(&info->client->dev, "%s - test_type[%d]\n", __func__, test_type);
+	input_dbg(true, &info->client->dev, "%s [START]\n", __func__);
+	input_dbg(true, &info->client->dev, "%s - test_type[%d]\n", __func__, test_type);
 
 	while (busy_cnt--) {
 		if (info->test_busy == false) {
@@ -420,7 +420,7 @@ int mip4_tk_run_test(struct mip4_tk_info *info, u8 test_type)
 	wbuf[1] = MIP_R1_CTRL_EVENT_TRIGGER_TYPE;
 	wbuf[2] = MIP_CTRL_TRIGGER_NONE;
 	if (mip4_tk_i2c_write(info, wbuf, 3)) {
-		dev_err(&info->client->dev, "%s [ERROR] Disable event\n", __func__);
+		input_err(true, &info->client->dev, "%s [ERROR] Disable event\n", __func__);
 		goto error;
 	}
 
@@ -431,7 +431,7 @@ int mip4_tk_run_test(struct mip4_tk_info *info, u8 test_type)
 		sprintf(info->print_buf, "\n=== Cp Test ===\n\n");
 		break;
 	default:
-		dev_err(&info->client->dev, "%s [ERROR] Unknown test type\n", __func__);
+		input_err(true, &info->client->dev, "%s [ERROR] Unknown test type\n", __func__);
 		sprintf(info->print_buf, "\nERROR : Unknown test type\n\n");
 		goto error;
 		break;
@@ -442,7 +442,7 @@ int mip4_tk_run_test(struct mip4_tk_info *info, u8 test_type)
 	wbuf[1] = MIP_R1_CTRL_MODE;
 	wbuf[2] = MIP_CTRL_MODE_TEST;
 	if (mip4_tk_i2c_write(info, wbuf, 3)) {
-		dev_err(&info->client->dev, "%s [ERROR] Write test mode\n", __func__);
+		input_err(true, &info->client->dev, "%s [ERROR] Write test mode\n", __func__);
 		goto error;
 	}
 
@@ -454,26 +454,26 @@ int mip4_tk_run_test(struct mip4_tk_info *info, u8 test_type)
 		}
 		msleep(10);
 
-		dev_dbg(&info->client->dev, "%s - wait [%d]\n", __func__, wait_cnt);
+		input_dbg(true, &info->client->dev, "%s - wait [%d]\n", __func__, wait_cnt);
 	}
 
 	if (wait_cnt <= 0) {
-		dev_err(&info->client->dev, "%s [ERROR] Wait timeout\n", __func__);
+		input_err(true, &info->client->dev, "%s [ERROR] Wait timeout\n", __func__);
 		goto error;
 	}
 
-	dev_dbg(&info->client->dev, "%s - set control mode\n", __func__);
+	input_dbg(true, &info->client->dev, "%s - set control mode\n", __func__);
 
 	//set test type
 	wbuf[0] = MIP_R0_TEST;
 	wbuf[1] = MIP_R1_TEST_TYPE;
 	wbuf[2] = test_type;
 	if (mip4_tk_i2c_write(info, wbuf, 3)) {
-		dev_err(&info->client->dev, "%s [ERROR] Write test type\n", __func__);
+		input_err(true, &info->client->dev, "%s [ERROR] Write test type\n", __func__);
 		goto error;
 	}
 
-	dev_dbg(&info->client->dev, "%s - set test type\n", __func__);
+	input_dbg(true, &info->client->dev, "%s - set test type\n", __func__);
 
 	//wait ready status
 	wait_cnt = 100;
@@ -483,21 +483,21 @@ int mip4_tk_run_test(struct mip4_tk_info *info, u8 test_type)
 		}
 		msleep(10);
 
-		dev_dbg(&info->client->dev, "%s - wait [%d]\n", __func__, wait_cnt);
+		input_dbg(true, &info->client->dev, "%s - wait [%d]\n", __func__, wait_cnt);
 	}
 
 	if (wait_cnt <= 0) {
-		dev_err(&info->client->dev, "%s [ERROR] Wait timeout\n", __func__);
+		input_err(true, &info->client->dev, "%s [ERROR] Wait timeout\n", __func__);
 		goto error;
 	}
 
-	dev_dbg(&info->client->dev, "%s - ready\n", __func__);
+	input_dbg(true, &info->client->dev, "%s - ready\n", __func__);
 
 	//data format
 	wbuf[0] = MIP_R0_TEST;
 	wbuf[1] = MIP_R1_TEST_DATA_FORMAT;
 	if (mip4_tk_i2c_read(info, wbuf, 2, rbuf, 6)) {
-		dev_err(&info->client->dev, "%s [ERROR] Read data format\n", __func__);
+		input_err(true, &info->client->dev, "%s [ERROR] Read data format\n", __func__);
 		goto error;
 	}
 	row_num = rbuf[0];
@@ -510,24 +510,24 @@ int mip4_tk_run_test(struct mip4_tk_info *info, u8 test_type)
 	data_type_sign = (data_type & 0x80) >> 7;
 	data_type_size = data_type & 0x7F;
 
-	dev_dbg(&info->client->dev, "%s - row_num[%d] col_num[%d] buffer_col_num[%d] rotate[%d] key_num[%d]\n", __func__, row_num, col_num, buffer_col_num, rotate, key_num);
-	dev_dbg(&info->client->dev, "%s - data_type[0x%02X] data_sign[%d] data_size[%d]\n", __func__, data_type, data_type_sign, data_type_size);
+	input_dbg(true, &info->client->dev, "%s - row_num[%d] col_num[%d] buffer_col_num[%d] rotate[%d] key_num[%d]\n", __func__, row_num, col_num, buffer_col_num, rotate, key_num);
+	input_dbg(true, &info->client->dev, "%s - data_type[0x%02X] data_sign[%d] data_size[%d]\n", __func__, data_type, data_type_sign, data_type_size);
 
 	//get buf addr
 	wbuf[0] = MIP_R0_TEST;
 	wbuf[1] = MIP_R1_TEST_BUF_ADDR;
 	if (mip4_tk_i2c_read(info, wbuf, 2, rbuf, 2)) {
-		dev_err(&info->client->dev, "%s [ERROR] Read buf addr\n", __func__);
+		input_err(true, &info->client->dev, "%s [ERROR] Read buf addr\n", __func__);
 		goto error;
 	}
 
 	buf_addr_l = rbuf[0];
 	buf_addr_h = rbuf[1];
-	dev_dbg(&info->client->dev, "%s - buf_addr[0x%02X 0x%02X]\n", __func__, buf_addr_h, buf_addr_l);
+	input_dbg(true, &info->client->dev, "%s - buf_addr[0x%02X 0x%02X]\n", __func__, buf_addr_h, buf_addr_l);
 
 	//print data
 	if (mip4_tk_proc_table_data(info, size, data_type_size, data_type_sign, buf_addr_h, buf_addr_l, row_num, col_num, buffer_col_num, rotate, key_num)) {
-		dev_err(&info->client->dev, "%s [ERROR] mip4_tk_proc_table_data\n", __func__);
+		input_err(true, &info->client->dev, "%s [ERROR] mip4_tk_proc_table_data\n", __func__);
 		goto error;
 	}
 
@@ -536,7 +536,7 @@ int mip4_tk_run_test(struct mip4_tk_info *info, u8 test_type)
 	wbuf[1] = MIP_R1_CTRL_MODE;
 	wbuf[2] = MIP_CTRL_MODE_NORMAL;
 	if (mip4_tk_i2c_write(info, wbuf, 3)) {
-		dev_err(&info->client->dev, "%s [ERROR] mip4_tk_i2c_write\n", __func__);
+		input_err(true, &info->client->dev, "%s [ERROR] mip4_tk_i2c_write\n", __func__);
 		goto error;
 	}
 
@@ -548,15 +548,15 @@ int mip4_tk_run_test(struct mip4_tk_info *info, u8 test_type)
 		}
 		msleep(10);
 
-		dev_dbg(&info->client->dev, "%s - wait [%d]\n", __func__, wait_cnt);
+		input_dbg(true, &info->client->dev, "%s - wait [%d]\n", __func__, wait_cnt);
 	}
 
 	if (wait_cnt <= 0) {
-		dev_err(&info->client->dev, "%s [ERROR] Wait timeout\n", __func__);
+		input_err(true, &info->client->dev, "%s [ERROR] Wait timeout\n", __func__);
 		goto error;
 	}
 
-	dev_dbg(&info->client->dev, "%s - set normal mode\n", __func__);
+	input_dbg(true, &info->client->dev, "%s - set normal mode\n", __func__);
 
 	goto exit;
 
@@ -569,7 +569,7 @@ exit:
 	wbuf[1] = MIP_R1_CTRL_EVENT_TRIGGER_TYPE;
 	wbuf[2] = MIP_CTRL_TRIGGER_INTR;
 	if (mip4_tk_i2c_write(info, wbuf, 3)) {
-		dev_err(&info->client->dev, "%s [ERROR] Enable event\n", __func__);
+		input_err(true, &info->client->dev, "%s [ERROR] Enable event\n", __func__);
 	}
 
 	mip4_tk_reboot(info);
@@ -579,9 +579,9 @@ exit:
 	mutex_unlock(&info->lock);
 
 	if (!ret) {
-		dev_dbg(&info->client->dev, "%s [DONE]\n", __func__);
+		input_dbg(true, &info->client->dev, "%s [DONE]\n", __func__);
 	} else {
-		dev_err(&info->client->dev, "%s [ERROR]\n", __func__);
+		input_err(true, &info->client->dev, "%s [ERROR]\n", __func__);
 	}
 
 	return ret;
@@ -609,14 +609,14 @@ int mip4_tk_get_image(struct mip4_tk_info *info, u8 image_type)
 	u8 buf_addr_l;
 	int ret = 0;
 
-	dev_dbg(&info->client->dev, "%s [START]\n", __func__);
-	dev_dbg(&info->client->dev, "%s - image_type[%d]\n", __func__, image_type);
+	input_dbg(true, &info->client->dev, "%s [START]\n", __func__);
+	input_dbg(true, &info->client->dev, "%s - image_type[%d]\n", __func__, image_type);
 
 	while (busy_cnt--) {
 		if (info->test_busy == false) {
 			break;
 		}
-		dev_dbg(&info->client->dev, "%s - busy_cnt[%d]\n", __func__, busy_cnt);
+		input_dbg(true, &info->client->dev, "%s - busy_cnt[%d]\n", __func__, busy_cnt);
 		msleep(1);
 	}
 
@@ -627,34 +627,34 @@ int mip4_tk_get_image(struct mip4_tk_info *info, u8 image_type)
 	memset(info->print_buf, 0, PAGE_SIZE);
 
 	//disable touch event
-	wbuf[0] = MIP_R0_CTRL;
+/*	wbuf[0] = MIP_R0_CTRL;
 	wbuf[1] = MIP_R1_CTRL_EVENT_TRIGGER_TYPE;
 	wbuf[2] = MIP_CTRL_TRIGGER_REG;
 	if (mip4_tk_i2c_write(info, wbuf, 3)) {
-		dev_err(&info->client->dev, "%s [ERROR] Disable event\n", __func__);
+		input_err(true, &info->client->dev, "%s [ERROR] Disable event\n", __func__);
 		goto error;
 	}
-
+*/
 	//check image type
 	switch (image_type) {
 	case MIP_IMG_TYPE_INTENSITY:
-		dev_dbg(&info->client->dev, "=== Intensity Image ===\n");
+		input_dbg(true, &info->client->dev, "=== Intensity Image ===\n");
 		sprintf(info->print_buf, "\n=== Intensity Image ===\n\n");
 		break;
 	case MIP_IMG_TYPE_RAWDATA:
-		dev_dbg(&info->client->dev, "=== Rawdata Image ===\n");
+		input_dbg(true, &info->client->dev, "=== Rawdata Image ===\n");
 		sprintf(info->print_buf, "\n=== Rawdata Image ===\n\n");
 		break;
 	case MIP_IMG_TYPE_SELF_RAWDATA:
-		dev_dbg(&info->client->dev, "=== Self Rawdata Image ===\n");
+		input_dbg(true, &info->client->dev, "=== Self Rawdata Image ===\n");
 		sprintf(info->print_buf, "\n=== Self Rawdata Image ===\n\n");
 		break;
 	case MIP_IMG_TYPE_SELF_INTENSITY:
-		dev_dbg(&info->client->dev, "=== Self Intensity Image ===\n");
+		input_dbg(true, &info->client->dev, "=== Self Intensity Image ===\n");
 		sprintf(info->print_buf, "\n=== Self Intensity Image ===\n\n");
 		break;
 	default:
-		dev_err(&info->client->dev, "%s [ERROR] Unknown image type\n", __func__);
+		input_err(true, &info->client->dev, "%s [ERROR] Unknown image type\n", __func__);
 		sprintf(info->print_buf, "\nERROR : Unknown image type\n\n");
 		goto error;
 		break;
@@ -665,11 +665,11 @@ int mip4_tk_get_image(struct mip4_tk_info *info, u8 image_type)
 	wbuf[1] = MIP_R1_IMAGE_TYPE;
 	wbuf[2] = image_type;
 	if (mip4_tk_i2c_write(info, wbuf, 3)) {
-		dev_err(&info->client->dev, "%s [ERROR] Write image type\n", __func__);
+		input_err(true, &info->client->dev, "%s [ERROR] Write image type\n", __func__);
 		goto error;
 	}
 
-	dev_dbg(&info->client->dev, "%s - set image type\n", __func__);
+	input_dbg(true, &info->client->dev, "%s - set image type\n", __func__);
 
 	//wait ready status
 	wait_cnt = 100;
@@ -678,20 +678,20 @@ int mip4_tk_get_image(struct mip4_tk_info *info, u8 image_type)
 			break;
 		}
 		msleep(10);
-		dev_dbg(&info->client->dev, "%s - wait [%d]\n", __func__, wait_cnt);
+		input_dbg(true, &info->client->dev, "%s - wait [%d]\n", __func__, wait_cnt);
 	}
 
 	if (wait_cnt <= 0) {
-		dev_err(&info->client->dev, "%s [ERROR] Wait timeout\n", __func__);
+		input_err(true, &info->client->dev, "%s [ERROR] Wait timeout\n", __func__);
 		goto error;
 	}
-	dev_dbg(&info->client->dev, "%s - ready\n", __func__);
+	input_dbg(true, &info->client->dev, "%s - ready\n", __func__);
 
 	//data format
 	wbuf[0] = MIP_R0_IMAGE;
 	wbuf[1] = MIP_R1_IMAGE_DATA_FORMAT;
 	if (mip4_tk_i2c_read(info, wbuf, 2, rbuf, 6)) {
-		dev_err(&info->client->dev, "%s [ERROR] Read data format\n", __func__);
+		input_err(true, &info->client->dev, "%s [ERROR] Read data format\n", __func__);
 		goto error;
 	}
 	row_num = rbuf[0];
@@ -704,24 +704,24 @@ int mip4_tk_get_image(struct mip4_tk_info *info, u8 image_type)
 	data_type_sign = (data_type & 0x80) >> 7;
 	data_type_size = data_type & 0x7F;
 
-	dev_dbg(&info->client->dev, "%s - row_num[%d] col_num[%d] buffer_col_num[%d] rotate[%d] key_num[%d]\n", __func__, row_num, col_num, buffer_col_num, rotate, key_num);
-	dev_dbg(&info->client->dev, "%s - data_type[0x%02X] data_sign[%d] data_size[%d]\n", __func__, data_type, data_type_sign, data_type_size);
+	input_dbg(true, &info->client->dev, "%s - row_num[%d] col_num[%d] buffer_col_num[%d] rotate[%d] key_num[%d]\n", __func__, row_num, col_num, buffer_col_num, rotate, key_num);
+	input_dbg(true, &info->client->dev, "%s - data_type[0x%02X] data_sign[%d] data_size[%d]\n", __func__, data_type, data_type_sign, data_type_size);
 
 	//get buf addr
 	wbuf[0] = MIP_R0_IMAGE;
 	wbuf[1] = MIP_R1_IMAGE_BUF_ADDR;
 	if (mip4_tk_i2c_read(info, wbuf, 2, rbuf, 2)) {
-		dev_err(&info->client->dev, "%s [ERROR] Read buf addr\n", __func__);
+		input_err(true, &info->client->dev, "%s [ERROR] Read buf addr\n", __func__);
 		goto error;
 	}
 
 	buf_addr_l = rbuf[0];
 	buf_addr_h = rbuf[1];
-	dev_dbg(&info->client->dev, "%s - buf_addr[0x%02X 0x%02X]\n", __func__, buf_addr_h, buf_addr_l);
+	input_dbg(true, &info->client->dev, "%s - buf_addr[0x%02X 0x%02X]\n", __func__, buf_addr_h, buf_addr_l);
 
 	//print data
 	if (mip4_tk_proc_table_data(info, size, data_type_size, data_type_sign, buf_addr_h, buf_addr_l, row_num, col_num, buffer_col_num, rotate, key_num)) {
-		dev_err(&info->client->dev, "%s [ERROR] mip4_tk_proc_table_data\n", __func__);
+		input_err(true, &info->client->dev, "%s [ERROR] mip4_tk_proc_table_data\n", __func__);
 		goto error;
 	}
 
@@ -730,7 +730,7 @@ int mip4_tk_get_image(struct mip4_tk_info *info, u8 image_type)
 	wbuf[1] = MIP_R1_IMAGE_TYPE;
 	wbuf[2] = MIP_IMG_TYPE_NONE;
 	if (mip4_tk_i2c_write(info, wbuf, 3)) {
-		dev_err(&info->client->dev, "%s [ERROR] Clear image type\n", __func__);
+		input_err(true, &info->client->dev, "%s [ERROR] Clear image type\n", __func__);
 		goto error;
 	}
 
@@ -741,21 +741,21 @@ error:
 
 exit:
 	//enable touch event
-	wbuf[0] = MIP_R0_CTRL;
+/*	wbuf[0] = MIP_R0_CTRL;
 	wbuf[1] = MIP_R1_CTRL_EVENT_TRIGGER_TYPE;
 	wbuf[2] = MIP_CTRL_TRIGGER_INTR;
 	if (mip4_tk_i2c_write(info, wbuf, 3)) {
-		dev_err(&info->client->dev, "%s [ERROR] Enable event\n", __func__);
+		input_err(true, &info->client->dev, "%s [ERROR] Enable event\n", __func__);
 	}
-
+*/
 	mutex_lock(&info->lock);
 	info->test_busy = false;
 	mutex_unlock(&info->lock);
 
 	if (!ret) {
-		dev_dbg(&info->client->dev, "%s [DONE]\n", __func__);
+		input_dbg(true, &info->client->dev, "%s [DONE]\n", __func__);
 	} else {
-		dev_err(&info->client->dev, "%s [ERROR]\n", __func__);
+		input_err(true, &info->client->dev, "%s [ERROR]\n", __func__);
 	}
 
 	return ret;
@@ -777,13 +777,13 @@ static ssize_t mip4_tk_sys_fw_version(struct device *dev, struct device_attribut
 	memset(info->print_buf, 0, PAGE_SIZE);
 
 	if (mip4_tk_get_fw_version(info, rbuf)) {
-		dev_err(&info->client->dev, "%s [ERROR] mip4_tk_get_fw_version\n", __func__);
+		input_err(true, &info->client->dev, "%s [ERROR] mip4_tk_get_fw_version\n", __func__);
 
 		sprintf(data, "F/W Version : ERROR\n");
 		goto error;
 	}
 
-	dev_info(&info->client->dev, "%s - F/W Version : %02X.%02X/%02X.%02X/%02X.%02X/%02X.%02X\n", __func__, rbuf[0], rbuf[1], rbuf[2], rbuf[3], rbuf[4], rbuf[5], rbuf[6], rbuf[7]);
+	input_info(true, &info->client->dev, "%s - F/W Version : %02X.%02X/%02X.%02X/%02X.%02X/%02X.%02X\n", __func__, rbuf[0], rbuf[1], rbuf[2], rbuf[3], rbuf[4], rbuf[5], rbuf[6], rbuf[7]);
 	sprintf(data, "F/W Version : %02X.%02X/%02X.%02X/%02X.%02X/%02X.%02X\n", rbuf[0], rbuf[1], rbuf[2], rbuf[3], rbuf[4], rbuf[5], rbuf[6], rbuf[7]);
 
 error:
@@ -801,25 +801,30 @@ static ssize_t mip4_tk_sys_fw_path_store(struct device *dev, struct device_attri
 	struct mip4_tk_info *info = dev_get_drvdata(dev);
 	char *path;
 
-	dev_dbg(&info->client->dev, "%s [START] \n", __func__);
+	input_dbg(true, &info->client->dev, "%s [START] \n", __func__);
 
 	if (count <= 1) {
-		dev_err(&info->client->dev, "%s [ERROR] Wrong value [%s]\n", __func__, buf);
+		input_err(true, &info->client->dev, "%s [ERROR] Wrong value [%s]\n", __func__, buf);
 		goto error;
 	}
+
+	if (info->fw_path_ext)
+		kfree(info->fw_path_ext);
 
 	path = kzalloc(count - 1, GFP_KERNEL);
 	memcpy(path, buf, count - 1);
 
 	info->fw_path_ext = kstrdup(path, GFP_KERNEL);
 
-	dev_dbg(&info->client->dev, "%s - Path : %s\n", __func__, info->fw_path_ext);
+	kfree(path);
 
-	dev_dbg(&info->client->dev, "%s [DONE] \n", __func__);
+	input_dbg(true, &info->client->dev, "%s - Path : %s\n", __func__, info->fw_path_ext);
+
+	input_dbg(true, &info->client->dev, "%s [DONE] \n", __func__);
 	return count;
 
 error:
-	dev_err(&info->client->dev, "%s [ERROR] \n", __func__);
+	input_err(true, &info->client->dev, "%s [ERROR] \n", __func__);
 	return count;
 }
 
@@ -834,11 +839,11 @@ static ssize_t mip4_tk_sys_fw_path_show(struct device *dev, struct device_attrib
 
 	memset(info->print_buf, 0, PAGE_SIZE);
 
-	dev_dbg(&info->client->dev, "%s [START] \n", __func__);
+	input_dbg(true, &info->client->dev, "%s [START] \n", __func__);
 
 	sprintf(data, "Path : %s\n", info->fw_path_ext);
 
-	dev_dbg(&info->client->dev, "%s [DONE] \n", __func__);
+	input_dbg(true, &info->client->dev, "%s [DONE] \n", __func__);
 
 	strcat(info->print_buf, data);
 	ret = snprintf(buf, PAGE_SIZE, "%s\n", info->print_buf);
@@ -856,12 +861,12 @@ static ssize_t mip4_tk_sys_bin_version(struct device *dev, struct device_attribu
 	u8 rbuf[16];
 
 	if (mip4_tk_get_fw_version_from_bin(info, rbuf)) {
-		dev_err(&info->client->dev, "%s [ERROR] mip_get_fw_version_from_bin\n", __func__);
+		input_err(true, &info->client->dev, "%s [ERROR] mip_get_fw_version_from_bin\n", __func__);
 		sprintf(data, "BIN Version : ERROR\n");
 		goto error;
 	}
 
-	dev_info(&info->client->dev, "%s - BIN Version : %02X.%02X/%02X.%02X/%02X.%02X/%02X.%02X\n", __func__, rbuf[0], rbuf[1], rbuf[2], rbuf[3], rbuf[4], rbuf[5], rbuf[6], rbuf[7]);
+	input_info(true, &info->client->dev, "%s - BIN Version : %02X.%02X/%02X.%02X/%02X.%02X/%02X.%02X\n", __func__, rbuf[0], rbuf[1], rbuf[2], rbuf[3], rbuf[4], rbuf[5], rbuf[6], rbuf[7]);
 	sprintf(data, "BIN Version : %02X.%02X/%02X.%02X/%02X.%02X/%02X.%02X\n", rbuf[0], rbuf[1], rbuf[2], rbuf[3], rbuf[4], rbuf[5], rbuf[6], rbuf[7]);
 
 error:
@@ -934,7 +939,7 @@ static ssize_t mip4_tk_sys_power_on(struct device *dev, struct device_attribute 
 
 	mip4_tk_power_on(info);
 
-	dev_info(&client->dev, "%s", __func__);
+	input_info(true, &client->dev, "%s", __func__);
 
 	sprintf(data, "Power : On\n");
 	strcat(info->print_buf,data);
@@ -958,7 +963,7 @@ static ssize_t mip4_tk_sys_power_off(struct device *dev, struct device_attribute
 
 	mip4_tk_power_off(info);
 
-	dev_info(&client->dev, "%s", __func__);
+	input_info(true, &client->dev, "%s", __func__);
 
 	sprintf(data, "Power : Off\n");
 	strcat(info->print_buf,data);
@@ -980,7 +985,7 @@ static ssize_t mip4_tk_sys_reboot(struct device *dev, struct device_attribute *a
 
 	memset(info->print_buf, 0, PAGE_SIZE);
 
-	dev_info(&client->dev, "%s", __func__);
+	input_info(true, &client->dev, "%s", __func__);
 
 	disable_irq(info->irq);
 	mip4_tk_clear_input(info);
@@ -1004,7 +1009,7 @@ static ssize_t mip4_tk_sys_mode_store(struct device *dev, struct device_attribut
 	u8 wbuf[8];
 	u8 value = 0;
 
-	dev_dbg(&info->client->dev, "%s [START] \n", __func__);
+	input_dbg(true, &info->client->dev, "%s [START] \n", __func__);
 
 	wbuf[0] = MIP_R0_CTRL;
 
@@ -1012,8 +1017,10 @@ static ssize_t mip4_tk_sys_mode_store(struct device *dev, struct device_attribut
 		wbuf[1] = MIP_R1_CTRL_HIGH_SENS_MODE;
 	} else if (!strcmp(attr->attr.name, "mode_charger")) {
 		wbuf[1] = MIP_R1_CTRL_CHARGER_MODE;
+	} else if (!strcmp(attr->attr.name, "mode_power")) {
+		wbuf[1] = MIP_R1_CTRL_POWER_STATE;
 	} else {
-		dev_err(&info->client->dev, "%s [ERROR] Unknown mode [%s]\n", __func__, attr->attr.name);
+		input_err(true, &info->client->dev, "%s [ERROR] Unknown mode [%s]\n", __func__, attr->attr.name);
 		goto error;
 	}
 
@@ -1022,23 +1029,23 @@ static ssize_t mip4_tk_sys_mode_store(struct device *dev, struct device_attribut
 	} else if (buf[0] == 49) {
 		value = 1;
 	} else {
-		dev_err(&info->client->dev, "%s [ERROR] Unknown value [%c]\n", __func__, buf[0]);
+		input_err(true, &info->client->dev, "%s [ERROR] Unknown value [%c]\n", __func__, buf[0]);
 		goto exit;
 	}
 	wbuf[2] = value;
 
 	if (mip4_tk_i2c_write(info, wbuf, 3)) {
-		dev_err(&info->client->dev, "%s [ERROR] mip4_tk_i2c_write\n", __func__);
+		input_err(true, &info->client->dev, "%s [ERROR] mip4_tk_i2c_write\n", __func__);
 	} else {
-		dev_info(&info->client->dev, "%s - addr[0x%02X%02X] value[%d]\n", __func__, wbuf[0], wbuf[1], value);
+		input_info(true, &info->client->dev, "%s - addr[0x%02X%02X] value[%d]\n", __func__, wbuf[0], wbuf[1], value);
 	}
 
 exit:
-	dev_dbg(&info->client->dev, "%s [DONE] \n", __func__);
+	input_dbg(true, &info->client->dev, "%s [DONE] \n", __func__);
 	return count;
 
 error:
-	dev_err(&info->client->dev, "%s [ERROR] \n", __func__);
+	input_err(true, &info->client->dev, "%s [ERROR] \n", __func__);
 	return count;
 }
 
@@ -1055,7 +1062,7 @@ static ssize_t mip4_tk_sys_mode_show(struct device *dev, struct device_attribute
 
 	memset(info->print_buf, 0, PAGE_SIZE);
 
-	dev_dbg(&info->client->dev, "%s [START]\n", __func__);
+	input_dbg(true, &info->client->dev, "%s [START]\n", __func__);
 
 	wbuf[0] = MIP_R0_CTRL;
 
@@ -1063,21 +1070,23 @@ static ssize_t mip4_tk_sys_mode_show(struct device *dev, struct device_attribute
 		wbuf[1] = MIP_R1_CTRL_HIGH_SENS_MODE;
 	} else if (!strcmp(attr->attr.name, "mode_charger")) {
 		wbuf[1] = MIP_R1_CTRL_CHARGER_MODE;
+	} else if (!strcmp(attr->attr.name, "mode_power")) {
+		wbuf[1] = MIP_R1_CTRL_POWER_STATE;
 	} else {
-		dev_err(&info->client->dev, "%s [ERROR] Unknown mode [%s]\n", __func__, attr->attr.name);
+		input_err(true, &info->client->dev, "%s [ERROR] Unknown mode [%s]\n", __func__, attr->attr.name);
 		sprintf(data, "%s : Unknown Mode\n", attr->attr.name);
 		goto exit;
 	}
 
 	if (mip4_tk_i2c_read(info, wbuf, 2, rbuf, 1)) {
-		dev_err(&info->client->dev, "%s [ERROR] mip4_tk_i2c_read\n", __func__);
+		input_err(true, &info->client->dev, "%s [ERROR] mip4_tk_i2c_read\n", __func__);
 		sprintf(data, "%s : ERROR\n", attr->attr.name);
 	} else {
-		dev_info(&info->client->dev, "%s - addr[0x%02X%02X] value[%d]\n", __func__, wbuf[0], wbuf[1], rbuf[0]);
+		input_info(true, &info->client->dev, "%s - addr[0x%02X%02X] value[%d]\n", __func__, wbuf[0], wbuf[1], rbuf[0]);
 		sprintf(data, "%s : %d\n", attr->attr.name, rbuf[0]);
 	}
 
-	dev_dbg(&info->client->dev, "%s [DONE]\n", __func__);
+	input_dbg(true, &info->client->dev, "%s [DONE]\n", __func__);
 
 exit:
 	strcat(info->print_buf, data);
@@ -1099,10 +1108,10 @@ static ssize_t mip4_tk_sys_led_onoff_store(struct device *dev, struct device_att
 	int i, value, idx, bit;
 	u8 values[4] = {0, };
 
-	dev_dbg(&info->client->dev, "%s [START]\n", __func__);
+	input_dbg(true, &info->client->dev, "%s [START]\n", __func__);
 
 	if (info->led_num <= 0) {
-		dev_dbg(&info->client->dev, "%s - N/A\n", __func__);
+		input_dbg(true, &info->client->dev, "%s - N/A\n", __func__);
 		goto exit;
 	}
 
@@ -1115,11 +1124,11 @@ static ssize_t mip4_tk_sys_led_onoff_store(struct device *dev, struct device_att
 	for (i = 0; i < info->led_num; i++) {
 		token = strsep(&stringp, delimiters);
 		if (token == NULL) {
-			dev_err(&info->client->dev, "%s [ERROR] LED number mismatch\n", __func__);
+			input_err(true, &info->client->dev, "%s [ERROR] LED number mismatch\n", __func__);
 			goto error;
 		} else {
 			if (kstrtoint(token, 10, &value)) {
-				dev_err(&info->client->dev, "%s [ERROR] wrong input value [%s]\n", __func__, token);
+				input_err(true, &info->client->dev, "%s [ERROR] wrong input value [%s]\n", __func__, token);
 				goto error;
 			}
 
@@ -1140,17 +1149,17 @@ static ssize_t mip4_tk_sys_led_onoff_store(struct device *dev, struct device_att
 	wbuf[4] = values[2];
 	wbuf[5] = values[3];
 	if (mip4_tk_i2c_write(info, wbuf, 6)) {
-		dev_err(&info->client->dev, "%s [ERROR] mip4_tk_i2c_write\n", __func__);
+		input_err(true, &info->client->dev, "%s [ERROR] mip4_tk_i2c_write\n", __func__);
 		goto error;
 	}
-	dev_dbg(&info->client->dev, "%s - wbuf 0x%02X 0x%02X 0x%02X 0x%02X\n", __func__, wbuf[2], wbuf[3], wbuf[4], wbuf[5]);
+	input_dbg(true, &info->client->dev, "%s - wbuf 0x%02X 0x%02X 0x%02X 0x%02X\n", __func__, wbuf[2], wbuf[3], wbuf[4], wbuf[5]);
 
 exit:
-	dev_dbg(&info->client->dev, "%s [DONE]\n", __func__);
+	input_dbg(true, &info->client->dev, "%s [DONE]\n", __func__);
 	return count;
 
 error:
-	dev_err(&info->client->dev, "%s [ERROR]\n", __func__);
+	input_err(true, &info->client->dev, "%s [ERROR]\n", __func__);
 	return count;
 }
 
@@ -1168,7 +1177,7 @@ static ssize_t mip4_tk_sys_led_onoff_show(struct device *dev, struct device_attr
 
 	memset(info->print_buf, 0, PAGE_SIZE);
 
-	dev_dbg(&info->client->dev, "%s [START]\n", __func__);
+	input_dbg(true, &info->client->dev, "%s [START]\n", __func__);
 
 	if (info->led_num <= 0) {
 		sprintf(data, "LED On/Off : N/A\n");
@@ -1179,7 +1188,7 @@ static ssize_t mip4_tk_sys_led_onoff_show(struct device *dev, struct device_attr
 	wbuf[1] = MIP_R1_LED_ON;
 
 	if (mip4_tk_i2c_read(info, wbuf, 2, rbuf, 4)) {
-		dev_err(&info->client->dev, "%s [ERROR] mip4_tk_i2c_read\n", __func__);
+		input_err(true, &info->client->dev, "%s [ERROR] mip4_tk_i2c_read\n", __func__);
 		sprintf(data, "LED On/Off : Error\n");
 	} else {
 		for (i = 0; i < info->led_num; i++) {
@@ -1196,7 +1205,7 @@ static ssize_t mip4_tk_sys_led_onoff_show(struct device *dev, struct device_attr
 	sprintf(data, "\n");
 
 exit:
-	dev_dbg(&info->client->dev, "%s [DONE]\n", __func__);
+	input_dbg(true, &info->client->dev, "%s [DONE]\n", __func__);
 
 	strcat(info->print_buf, data);
 	ret = snprintf(buf, PAGE_SIZE, "%s\n", info->print_buf);
@@ -1217,10 +1226,10 @@ static ssize_t mip4_tk_sys_led_brightness_store(struct device *dev, struct devic
 	int value, i;
 	u8 values[MAX_LED_NUM];
 
-	dev_dbg(&info->client->dev, "%s [START]\n", __func__);
+	input_dbg(true, &info->client->dev, "%s [START]\n", __func__);
 
 	if (info->led_num <= 0) {
-		dev_dbg(&info->client->dev, "%s - N/A\n", __func__);
+		input_dbg(true, &info->client->dev, "%s - N/A\n", __func__);
 		goto exit;
 	}
 
@@ -1233,11 +1242,11 @@ static ssize_t mip4_tk_sys_led_brightness_store(struct device *dev, struct devic
 	for (i = 0; i < info->led_num; i++) {
 		token = strsep(&stringp, delimiters);
 		if (token == NULL) {
-			dev_err(&info->client->dev, "%s [ERROR] LED number mismatch\n", __func__);
+			input_err(true, &info->client->dev, "%s [ERROR] LED number mismatch\n", __func__);
 			goto error;
 		} else {
 			if (kstrtoint(token, 10, &value)) {
-				dev_err(&info->client->dev, "%s [ERROR] wrong input value [%s]\n", __func__, token);
+				input_err(true, &info->client->dev, "%s [ERROR] wrong input value [%s]\n", __func__, token);
 				goto error;
 			}
 			values[i] = (u8)value;
@@ -1248,16 +1257,16 @@ static ssize_t mip4_tk_sys_led_brightness_store(struct device *dev, struct devic
 	wbuf[1] = MIP_R1_LED_BRIGHTNESS;
 	memcpy(&wbuf[2], values, info->led_num);
 	if (mip4_tk_i2c_write(info, wbuf, (2 + info->led_num))) {
-		dev_err(&info->client->dev, "%s [ERROR] mip4_tk_i2c_write\n", __func__);
+		input_err(true, &info->client->dev, "%s [ERROR] mip4_tk_i2c_write\n", __func__);
 		goto error;
 	}
 
 exit:
-	dev_dbg(&info->client->dev, "%s [DONE]\n", __func__);
+	input_dbg(true, &info->client->dev, "%s [DONE]\n", __func__);
 	return count;
 
 error:
-	dev_err(&info->client->dev, "%s [ERROR]\n", __func__);
+	input_err(true, &info->client->dev, "%s [ERROR]\n", __func__);
 	return count;
 }
 
@@ -1274,7 +1283,7 @@ static ssize_t mip4_tk_sys_led_brightness_show(struct device *dev, struct device
 
 	memset(info->print_buf, 0, PAGE_SIZE);
 
-	dev_dbg(&info->client->dev, "%s [START]\n", __func__);
+	input_dbg(true, &info->client->dev, "%s [START]\n", __func__);
 
 	if (info->led_num <= 0) {
 		sprintf(data, "LED brightness : N/A\n");
@@ -1284,7 +1293,7 @@ static ssize_t mip4_tk_sys_led_brightness_show(struct device *dev, struct device
 	wbuf[0] = MIP_R0_LED;
 	wbuf[1] = MIP_R1_LED_BRIGHTNESS;
 	if (mip4_tk_i2c_read(info, wbuf, 2, rbuf, info->led_num)) {
-		dev_err(&info->client->dev, "%s [ERROR] mip4_tk_i2c_read\n", __func__);
+		input_err(true, &info->client->dev, "%s [ERROR] mip4_tk_i2c_read\n", __func__);
 		sprintf(data, "LED brightness : ERROR\n");
 	} else {
 		for (i = 0; i < info->led_num; i++) {
@@ -1299,7 +1308,7 @@ static ssize_t mip4_tk_sys_led_brightness_show(struct device *dev, struct device
 	}
 
 exit:
-	dev_dbg(&info->client->dev, "%s [DONE]\n", __func__);
+	input_dbg(true, &info->client->dev, "%s [DONE]\n", __func__);
 
 	strcat(info->print_buf, data);
 	ret = snprintf(buf, PAGE_SIZE, "%s\n", info->print_buf);
@@ -1319,18 +1328,18 @@ static ssize_t mip4_tk_sys_led_max_brightness(struct device *dev, struct device_
 
 	memset(info->print_buf, 0, PAGE_SIZE);
 
-	dev_dbg(&info->client->dev, "%s [START]\n", __func__);
+	input_dbg(true, &info->client->dev, "%s [START]\n", __func__);
 
 	wbuf[0] = MIP_R0_LED;
 	wbuf[1] = MIP_R1_LED_MAX_BRIGHTNESS;
 	if (mip4_tk_i2c_read(info, wbuf, 2, rbuf, 1)) {
-		dev_err(&info->client->dev, "%s [ERROR] mip4_tk_i2c_read\n", __func__);
+		input_err(true, &info->client->dev, "%s [ERROR] mip4_tk_i2c_read\n", __func__);
 		sprintf(data, "LED max brightness : ERROR\n");
 	} else {
 		sprintf(data, "LED max brightness : %d\n", rbuf[0]);
 	}
 
-	dev_dbg(&info->client->dev, "%s [DONE]\n", __func__);
+	input_dbg(true, &info->client->dev, "%s [DONE]\n", __func__);
 
 	strcat(info->print_buf, data);
 	ret = snprintf(buf, PAGE_SIZE, "%s\n", info->print_buf);
@@ -1346,31 +1355,31 @@ static ssize_t mip4_tk_sys_image(struct device *dev, struct device_attribute *at
 	int ret;
 	u8 type;
 
-	dev_dbg(&info->client->dev, "%s [START]\n", __func__);
+	input_dbg(true, &info->client->dev, "%s [START]\n", __func__);
 
 	if (!strcmp(attr->attr.name, "image_intensity")) {
-		type = MIP_IMG_TYPE_SELF_INTENSITY;
+		type = MIP_IMG_TYPE_INTENSITY;
 	} else if (!strcmp(attr->attr.name, "image_rawdata")) {
-		type = MIP_IMG_TYPE_SELF_RAWDATA;
+		type = MIP_IMG_TYPE_RAWDATA;
 	} else {
-		dev_err(&info->client->dev, "%s [ERROR] Unknown image [%s]\n", __func__, attr->attr.name);
+		input_err(true, &info->client->dev, "%s [ERROR] Unknown image [%s]\n", __func__, attr->attr.name);
 		ret = snprintf(buf, PAGE_SIZE, "%s\n", "ERROR : Unknown image type");
 		goto error;
 	}
 
 	if (mip4_tk_get_image(info, type)) {
-		dev_err(&info->client->dev, "%s [ERROR] mip4_tk_get_image\n", __func__);
+		input_err(true, &info->client->dev, "%s [ERROR] mip4_tk_get_image\n", __func__);
 		ret = snprintf(buf, PAGE_SIZE, "%s\n", "ERROR");
 		goto error;
 	}
 
-	dev_dbg(&info->client->dev, "%s [DONE]\n", __func__);
+	input_dbg(true, &info->client->dev, "%s [DONE]\n", __func__);
 
 	ret = snprintf(buf, PAGE_SIZE, "%s\n", info->print_buf);
 	return ret;
 
 error:
-	dev_err(&info->client->dev, "%s [ERROR]\n", __func__);
+	input_err(true, &info->client->dev, "%s [ERROR]\n", __func__);
 	return ret;
 }
 
@@ -1383,29 +1392,31 @@ static ssize_t __maybe_unused mip4_tk_sys_test(struct device *dev, struct device
 	int ret;
 	u8 test_type;
 
-	dev_dbg(&info->client->dev, "%s [START] \n", __func__);
+	input_dbg(true, &info->client->dev, "%s [START] \n", __func__);
 
 	if (!strcmp(attr->attr.name, "test_cp")) {
 		test_type = MIP_TEST_TYPE_CP;
+	} else if (!strcmp(attr->attr.name, "test_cp_jitter")) {
+		test_type = MIP_TEST_TYPE_CP_JITTER;
 	} else {
-		dev_err(&info->client->dev, "%s [ERROR] Unknown test [%s]\n", __func__, attr->attr.name);
+		input_err(true, &info->client->dev, "%s [ERROR] Unknown test [%s]\n", __func__, attr->attr.name);
 		ret = snprintf(buf, PAGE_SIZE, "%s\n", "ERROR : Unknown test type");
 		goto error;
 	}
 
 	if (mip4_tk_run_test(info, test_type)) {
-		dev_err(&info->client->dev, "%s [ERROR] mip4_tk_run_test\n", __func__);
+		input_err(true, &info->client->dev, "%s [ERROR] mip4_tk_run_test\n", __func__);
 		ret = snprintf(buf, PAGE_SIZE, "%s\n", "ERROR");
 		goto error;
 	}
 
-	dev_dbg(&info->client->dev, "%s [DONE]\n", __func__);
+	input_dbg(true, &info->client->dev, "%s [DONE]\n", __func__);
 
 	ret = snprintf(buf, PAGE_SIZE, "%s\n", info->print_buf);
 	return ret;
 
 error:
-	dev_err(&info->client->dev, "%s [ERROR]\n", __func__);
+	input_err(true, &info->client->dev, "%s [ERROR]\n", __func__);
 	return ret;
 }
 
@@ -1418,11 +1429,14 @@ static DEVICE_ATTR(fw_path, S_IRUGO | S_IWUSR | S_IWGRP, mip4_tk_sys_fw_path_sho
 static DEVICE_ATTR(info, S_IRUGO, mip4_tk_sys_info, NULL);
 static DEVICE_ATTR(mode_glove, S_IRUGO | S_IWUSR | S_IWGRP, mip4_tk_sys_mode_show, mip4_tk_sys_mode_store);
 static DEVICE_ATTR(mode_charger, S_IRUGO | S_IWUSR | S_IWGRP, mip4_tk_sys_mode_show, mip4_tk_sys_mode_store);
+static DEVICE_ATTR(mode_power, S_IRUGO | S_IWUSR | S_IWGRP, mip4_tk_sys_mode_show, mip4_tk_sys_mode_store);
 static DEVICE_ATTR(led_onoff, S_IRUGO | S_IWUSR | S_IWGRP, mip4_tk_sys_led_onoff_show, mip4_tk_sys_led_onoff_store);
 static DEVICE_ATTR(led_brightness, S_IRUGO | S_IWUSR | S_IWGRP, mip4_tk_sys_led_brightness_show, mip4_tk_sys_led_brightness_store);
 static DEVICE_ATTR(led_max_brightness, S_IRUGO, mip4_tk_sys_led_max_brightness, NULL);
 static DEVICE_ATTR(image_intensity, S_IRUGO, mip4_tk_sys_image, NULL);
 static DEVICE_ATTR(image_rawdata, S_IRUGO, mip4_tk_sys_image, NULL);
+static DEVICE_ATTR(test_cp, S_IRUGO, mip4_tk_sys_test, NULL);
+static DEVICE_ATTR(test_cp_jitter, S_IRUGO, mip4_tk_sys_test, NULL);
 #ifdef DEBUG
 static DEVICE_ATTR(power_on, S_IRUGO, mip4_tk_sys_power_on, NULL);
 static DEVICE_ATTR(power_off, S_IRUGO, mip4_tk_sys_power_off, NULL);
@@ -1439,11 +1453,14 @@ static struct attribute *mip4_tk_sys_attr[] = {
 	&dev_attr_info.attr,
 	&dev_attr_mode_glove.attr,
 	&dev_attr_mode_charger.attr,
+	&dev_attr_mode_power.attr,
 	&dev_attr_led_onoff.attr,
 	&dev_attr_led_brightness.attr,
 	&dev_attr_led_max_brightness.attr,
 	&dev_attr_image_intensity.attr,
 	&dev_attr_image_rawdata.attr,
+	&dev_attr_test_cp.attr,
+	&dev_attr_test_cp_jitter.attr,
 #ifdef DEBUG
 	&dev_attr_power_on.attr,
 	&dev_attr_power_off.attr,
@@ -1465,20 +1482,52 @@ static const struct attribute_group mip4_tk_sys_attr_group = {
 int mip4_tk_sysfs_create(struct mip4_tk_info *info)
 {
 	struct i2c_client *client = info->client;
+	int ret;
 
-	dev_dbg(&info->client->dev, "%s [START]\n", __func__);
+	input_dbg(true, &info->client->dev, "%s [START]\n", __func__);
 
-	if (sysfs_create_group(&client->dev.kobj, &mip4_tk_sys_attr_group)) {
-		dev_err(&client->dev, "%s [ERROR] sysfs_create_group\n", __func__);
-		return -EAGAIN;
+	ret = sysfs_create_group(&client->dev.kobj, &mip4_tk_sys_attr_group);
+	if (ret) {
+		input_err(true, &client->dev,
+			"%s [ERROR] sysfs_create_group\n", __func__);
+		return ret;
 	}
 
-	info->print_buf = kzalloc(sizeof(u8) * PAGE_SIZE, GFP_KERNEL);
-	info->image_buf = kzalloc(sizeof(int) * PAGE_SIZE, GFP_KERNEL);
+	if (info->print_buf == NULL) {
+		info->print_buf = kzalloc(sizeof(u8) * PAGE_SIZE, GFP_KERNEL);
+		if (!info->print_buf) {
+			input_err(true, &client->dev,
+				"%s [ERROR] kzalloc for print buf\n",
+				__func__);
+			ret = -ENOMEM;
+			goto exti_print_buf;
+		}
+	}
 
-	dev_dbg(&info->client->dev, "%s [DONE]\n", __func__);
+	if (info->image_buf == NULL) {
+		info->image_buf = kzalloc(sizeof(int) * PAGE_SIZE, GFP_KERNEL);
+		if (!info->image_buf) {
+			input_err(true, &client->dev,
+				"%s [ERROR] kzalloc for image buf\n",
+				__func__);
+			ret = -ENOMEM;
+			goto exit_image_buf;
+		}
+	}
+
+	input_dbg(true, &info->client->dev, "%s [DONE]\n", __func__);
 
 	return 0;
+
+exti_print_buf:
+	sysfs_remove_group(&info->client->dev.kobj, &mip4_tk_sys_attr_group);
+exit_image_buf:
+	if (info->print_buf) {
+		kfree(info->print_buf);
+		info->print_buf = NULL;
+	}
+
+	return ret;
 }
 
 /**
@@ -1486,14 +1535,21 @@ int mip4_tk_sysfs_create(struct mip4_tk_info *info)
 */
 void mip4_tk_sysfs_remove(struct mip4_tk_info *info)
 {
-	dev_dbg(&info->client->dev, "%s [START]\n", __func__);
+	input_dbg(true, &info->client->dev, "%s [START]\n", __func__);
 
 	sysfs_remove_group(&info->client->dev.kobj, &mip4_tk_sys_attr_group);
 
-	kfree(info->print_buf);
-	kfree(info->image_buf);
+	if (info->image_buf) {
+		kfree(info->image_buf);
+		info->image_buf = NULL;
+	}
 
-	dev_dbg(&info->client->dev, "%s [DONE]\n", __func__);
+	if (info->print_buf) {
+		kfree(info->print_buf);
+		info->print_buf = NULL;
+	}
+
+	input_dbg(true, &info->client->dev, "%s [DONE]\n", __func__);
 
 	return;
 }

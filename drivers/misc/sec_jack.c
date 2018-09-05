@@ -312,6 +312,9 @@ static void sec_jack_set_type(struct sec_jack_info *hi,
 			mod_timer(&hi->timer,
 				jiffies + msecs_to_jiffies(1000));
 	} else {
+		/* micbias is left enabled for 4pole and disabled otherwise */
+		set_sec_micbias_state(hi, false);
+	
 		/* for all other jacks, disable send/end key detection */
 		if (hi->send_key_dev != NULL) {
 			/* disable to prevent false events on next insert */
@@ -320,8 +323,6 @@ static void sec_jack_set_type(struct sec_jack_info *hi,
 			del_timer_sync(&hi->timer);
 			hi->buttons_enable = false;
 		}
-		/* micbias is left enabled for 4pole and disabled otherwise */
-		set_sec_micbias_state(hi, false);
 	}
 
 	if ((jack_type == SEC_HEADSET_4POLE) ||
@@ -470,6 +471,8 @@ void sec_jack_detect_work(struct work_struct *work)
 	unsigned npolarity = !hi->pdata->det_active_high;
 	int time_left_ms;
 
+	disable_irq(hi->det_irq);
+
 	if (pdata->det_debounce_time_ms > 0)
 		time_left_ms = pdata->det_debounce_time_ms;
 	else
@@ -488,7 +491,7 @@ void sec_jack_detect_work(struct work_struct *work)
 		if (!(gpio_get_value(hi->pdata->det_gpio) ^ npolarity)) {
 			/* jack not detected. */
 			handle_jack_not_inserted(hi);
-			return;
+			goto done;
 		}
 		usleep_range(10000, 11000);
 		time_left_ms -= 10;
@@ -496,6 +499,8 @@ void sec_jack_detect_work(struct work_struct *work)
 
 	/* jack presence was detected the whole time, figure out which type */
 	determine_jack_type(hi);
+done:
+	enable_irq(hi->det_irq);
 }
 
 /* thread run whenever the button of headset is pressed or released */
@@ -760,8 +765,6 @@ static int sec_jack_probe(struct platform_device *pdev)
 		goto err_create_buttons_wq_failed;
 	}
 
-	queue_work(hi->detect_wq, &hi->detect_work);
-
 	hi->det_irq = gpio_to_irq(pdata->det_gpio);
 
 	set_bit(EV_KEY, hi->ids[0].evbit);
@@ -840,6 +843,8 @@ static int sec_jack_probe(struct platform_device *pdev)
 		goto err_dev_attr_mic_adc;
 	}
 	dev_set_drvdata(earjack, hi);
+
+	queue_work(hi->detect_wq, &hi->detect_work);
 
 	dev_info(&pdev->dev, "Registering sec_jack driver\n");
 	return 0;

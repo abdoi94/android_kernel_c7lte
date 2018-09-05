@@ -42,12 +42,14 @@
 #define CVD_VERSION_0_0                      "0.0"
 #define CVD_VERSION_2_1                      "2.1"
 #define CVD_VERSION_2_2                      "2.2"
+#define CVD_VERSION_2_3                      "2.3"
 
 #define CVD_INT_VERSION_DEFAULT              0
 #define CVD_INT_VERSION_0_0                  1
 #define CVD_INT_VERSION_2_1                  2
 #define CVD_INT_VERSION_2_2                  3
-#define CVD_INT_VERSION_LAST                 CVD_INT_VERSION_2_2
+#define CVD_INT_VERSION_2_3                  4
+#define CVD_INT_VERSION_LAST                 CVD_INT_VERSION_2_3
 #define CVD_INT_VERSION_MAX                  (CVD_INT_VERSION_LAST + 1)
 
 struct cvd_version_table {
@@ -156,7 +158,7 @@ struct share_mem_buf {
 struct mem_map_table {
 	dma_addr_t		phys;
 	void			*data;
-	uint32_t		size; /* size of buffer */
+	size_t			size; /* size of buffer */
 	struct ion_handle	*handle;
 	struct ion_client	*client;
 };
@@ -1336,7 +1338,7 @@ struct vss_ivocproc_cmd_topology_set_dev_channels_t {
 #define VSS_IVPCM_SAMPLING_RATE_16K	16000
 
 /* RX and TX */
-#define MAX_TAP_POINTS_SUPPORTED	1
+#define MAX_TAP_POINTS_SUPPORTED	2
 
 struct vss_ivpcm_tap_point {
 	uint32_t tap_point;
@@ -1882,6 +1884,8 @@ int voice_sec_set_nbmode(short enable);
 int voice_sec_set_dha_data(short mode, short select, short *parameters);
 int voc_get_loopback_enable(void);
 void voc_set_loopback_enable(int loopback_enable);
-#endif /* CONFIG_SEC_VOC_SOLUTION*/
+#elif defined(CONFIG_SEC_SND_ADAPTATION)
+struct common_data *voice_get_common_data(void);
+#endif
 
 #endif

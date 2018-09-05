@@ -60,6 +60,8 @@
 #define A5XX_CP_RB_BASE                  0x800
 #define A5XX_CP_RB_BASE_HI               0x801
 #define A5XX_CP_RB_CNTL                  0x802
+#define A5XX_CP_RB_RPTR_ADDR_LO          0x804
+#define A5XX_CP_RB_RPTR_ADDR_HI          0x805
 #define A5XX_CP_RB_RPTR                  0x806
 #define A5XX_CP_RB_WPTR                  0x807
 #define A5XX_CP_PFP_STAT_ADDR            0x808
@@ -559,6 +561,7 @@
 
 
 /* RB registers */
+#define A5XX_RB_DBG_ECO_CNT                 0xCC4
 #define A5XX_RB_ADDR_MODE_CNTL              0xCC5
 #define A5XX_RB_MODE_CNTL                   0xCC6
 #define A5XX_RB_PERFCTR_RB_SEL_0            0xCD0
@@ -605,6 +608,7 @@
 #define A5XX_PC_PERFCTR_PC_SEL_7            0xD17
 
 /* HLSQ registers */
+#define A5XX_HLSQ_DBG_ECO_CNTL		    0xE04
 #define A5XX_HLSQ_ADDR_MODE_CNTL            0xE05
 #define A5XX_HLSQ_PERFCTR_HLSQ_SEL_0        0xE10
 #define A5XX_HLSQ_PERFCTR_HLSQ_SEL_1        0xE11
@@ -629,6 +633,7 @@
 #define A5XX_VFD_PERFCTR_VFD_SEL_7          0xE57
 
 /* VPC registers */
+#define A5XX_VPC_DBG_ECO_CNTL		    0xE60
 #define A5XX_VPC_ADDR_MODE_CNTL             0xE61
 #define A5XX_VPC_PERFCTR_VPC_SEL_0          0xE64
 #define A5XX_VPC_PERFCTR_VPC_SEL_1          0xE65
@@ -637,6 +642,7 @@
 
 /* UCHE registers */
 #define A5XX_UCHE_ADDR_MODE_CNTL            0xE80
+#define A5XX_UCHE_MODE_CNTL                 0xE81
 #define A5XX_UCHE_WRITE_THRU_BASE_LO        0xE87
 #define A5XX_UCHE_WRITE_THRU_BASE_HI        0xE88
 #define A5XX_UCHE_TRAP_BASE_LO              0xE89
@@ -728,7 +734,7 @@
 
 #define A5XX_VBIF_TEST_BUS2_CTRL0                   0x3087
 #define A5XX_VBIF_TEST_BUS2_CTRL1                   0x3088
-#define A5XX_VBIF_TEST_BUS2_CTRL1_DATA_SEL_MASK     0xF
+#define A5XX_VBIF_TEST_BUS2_CTRL1_DATA_SEL_MASK     0x1FF
 #define A5XX_VBIF_TEST_BUS2_CTRL1_DATA_SEL_SHIFT    0x0
 
 #define A5XX_VBIF_TEST_BUS_OUT             0x308c
@@ -855,6 +861,7 @@
 #define A5XX_GPMU_ALWAYS_ON_COUNTER_RESET	0xA87B
 #define A5XX_GPMU_POWER_COUNTER_SELECT_0	0xA87C
 #define A5XX_GPMU_POWER_COUNTER_SELECT_1	0xA87D
+#define A5XX_GPMU_GPMU_SP_CLOCK_CONTROL		0xA880
 
 #define A5XX_GPMU_CLOCK_THROTTLE_CTRL		0xA8A3
 #define A5XX_GPMU_THROTTLE_UNMASK_FORCE_CTRL	0xA8A8

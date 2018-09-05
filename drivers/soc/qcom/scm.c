@@ -1,4 +1,4 @@
-/* Copyright (c) 2010-2016, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2010-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -65,9 +65,16 @@ DEFINE_MUTEX(scm_lmh_lock);
 #define SMC_ATOMIC_MASK 0x80000000
 #define IS_CALL_AVAIL_CMD 1
 
-#define SCM_BUF_LEN(__cmd_size, __resp_size)	\
-	(sizeof(struct scm_command) + sizeof(struct scm_response) + \
-		__cmd_size + __resp_size)
+#define SCM_BUF_LEN(__cmd_size, __resp_size) ({ \
+	size_t x =  __cmd_size + __resp_size; \
+	size_t y = sizeof(struct scm_command) + sizeof(struct scm_response); \
+	size_t result; \
+	if (x < __cmd_size || (x + y) < x) \
+		result = 0; \
+	else \
+		result = x + y; \
+	result; \
+	})
 /**
  * struct scm_command - one SCM command buffer
  * @len: total available memory for command and response
@@ -373,8 +380,7 @@ int scm_call_noalloc(u32 svc_id, u32 cmd_id, const void *cmd_buf,
 	int ret;
 	size_t len = SCM_BUF_LEN(cmd_len, resp_len);
 
-	if (cmd_len > scm_buf_len || resp_len > scm_buf_len ||
-	    len > scm_buf_len)
+	if (len == 0)
 		return -EINVAL;
 
 	if (!IS_ALIGNED((unsigned long)scm_buf, PAGE_SIZE))
@@ -661,7 +667,10 @@ pid_t pid_from_lkm = -1;
 */
 int scm_call2(u32 fn_id, struct scm_desc *desc)
 {
-	int call_from_ss_daemon;
+	const char* const proca_clients_names[] =
+		{"secure_storage_daemon", "pa_daemon", "wsmd", NULL}; // keep last NULL!
+	int call_from_proca = 0;
+	int i;
 	int arglen = desc->arginfo & 0xf;
 	int ret, retry_count = 0;
 	u64 x0;
@@ -676,9 +685,15 @@ int scm_call2(u32 fn_id, struct scm_desc *desc)
 	x0 = fn_id | scm_version_mask;
 
 	/*
-	 * in case of secure_storage_daemon
+	 * in case of pa_daemon
 	 */
-	call_from_ss_daemon = (strncmp(current_thread_info()->task->comm, "secure_storage_daemon", TASK_COMM_LEN - 1) == 0);
+	for (i = 0; proca_clients_names[i]; i++) {
+		if (strncmp(current_thread_info()->task->comm, proca_clients_names[i],
+					TASK_COMM_LEN - 1) == 0) {
+			call_from_proca = 1;
+			break;
+		}
+	}
 
 	sec_debug_secure_log(fn_id, SCM_ENTRY);
 
@@ -690,20 +705,16 @@ int scm_call2(u32 fn_id, struct scm_desc *desc)
 
 		desc->ret[0] = desc->ret[1] = desc->ret[2] = 0;
 
-		pr_debug("scm_call: func id %#llx, args: %#x, %#llx, %#llx, %#llx, %#llx\n",
-			x0, desc->arginfo, desc->args[0], desc->args[1],
-			desc->args[2], desc->x5);
-
 		trace_scm_call_start(x0, desc);
 
 #ifdef CONFIG_TIMA_LKMAUTH
-		if ((pid_from_lkm == current_thread_info()->task->pid) || call_from_ss_daemon) {
+		if ((pid_from_lkm == current_thread_info()->task->pid) || call_from_proca) {
 #else
-		if (call_from_ss_daemon) {
+		if (call_from_proca) {
 #endif
 			flush_cache_all();
 
-#if defined(CONFIG_ARCH_MSM8953)
+#if defined(CONFIG_ARCH_MSM8917) || defined(CONFIG_ARCH_MSM8937) ||  defined(CONFIG_ARCH_MSM8953)
 			smp_call_function((void (*)(void *))__wrap_flush_cache_all, NULL, 1);
 #endif
 
@@ -740,10 +751,8 @@ int scm_call2(u32 fn_id, struct scm_desc *desc)
 	sec_debug_secure_log(fn_id, SCM_EXIT);
 
 	if (ret < 0)
-		pr_err("scm_call failed: func id %#llx, arginfo: %#x, args: %#llx, %#llx, %#llx, %#llx, ret: %d, syscall returns: %#llx, %#llx, %#llx\n",
-			x0, desc->arginfo, desc->args[0], desc->args[1],
-			desc->args[2], desc->x5, ret, desc->ret[0],
-			desc->ret[1], desc->ret[2]);
+		pr_err("scm_call failed: func id %#llx, ret: %d, syscall returns: %#llx, %#llx, %#llx\n",
+			x0, ret, desc->ret[0], desc->ret[1], desc->ret[2]);
 
 	if (arglen > N_REGISTER_ARGS)
 		kfree(desc->extra_arg_buf);
@@ -776,10 +785,6 @@ int scm_call2_atomic(u32 fn_id, struct scm_desc *desc)
 
 	x0 = fn_id | BIT(SMC_ATOMIC_SYSCALL) | scm_version_mask;
 
-	pr_debug("scm_call: func id %#llx, args: %#x, %#llx, %#llx, %#llx, %#llx\n",
-		x0, desc->arginfo, desc->args[0], desc->args[1],
-		desc->args[2], desc->x5);
-
 	if (scm_version == SCM_ARMV8_64)
 		ret = __scm_call_armv8_64(x0, desc->arginfo, desc->args[0],
 					  desc->args[1], desc->args[2],
@@ -791,9 +796,8 @@ int scm_call2_atomic(u32 fn_id, struct scm_desc *desc)
 					  desc->x5, &desc->ret[0],
 					  &desc->ret[1], &desc->ret[2]);
 	if (ret < 0)
-		pr_err("scm_call failed: func id %#llx, arginfo: %#x, args: %#llx, %#llx, %#llx, %#llx, ret: %d, syscall returns: %#llx, %#llx, %#llx\n",
-			x0, desc->arginfo, desc->args[0], desc->args[1],
-			desc->args[2], desc->x5, ret, desc->ret[0],
+		pr_err("scm_call failed: func id %#llx, ret: %d, syscall returns: %#llx, %#llx, %#llx\n",
+			x0, ret, desc->ret[0],
 			desc->ret[1], desc->ret[2]);
 
 	if (arglen > N_REGISTER_ARGS)
@@ -828,7 +832,7 @@ int scm_call(u32 svc_id, u32 cmd_id, const void *cmd_buf, size_t cmd_len,
 	int ret;
 	size_t len = SCM_BUF_LEN(cmd_len, resp_len);
 
-	if (cmd_len > len || resp_len > len)
+	if (len == 0 || PAGE_ALIGN(len) < len)
 		return -EINVAL;
 
 	cmd = kzalloc(PAGE_ALIGN(len), GFP_KERNEL);

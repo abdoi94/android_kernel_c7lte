@@ -1,4 +1,4 @@
-/* Copyright (c) 2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -42,21 +42,16 @@
 #define TZ_ES_SET_ICE_KEY_ID \
 	TZ_SYSCALL_CREATE_SMC_ID(TZ_OWNER_SIP, TZ_SVC_ES, TZ_ES_SET_ICE_KEY)
 
-
 #define TZ_ES_INVALIDATE_ICE_KEY_ID \
-		TZ_SYSCALL_CREATE_SMC_ID(TZ_OWNER_SIP, \
-			TZ_SVC_ES, TZ_ES_INVALIDATE_ICE_KEY)
+	TZ_SYSCALL_CREATE_SMC_ID(TZ_OWNER_SIP, \
+		TZ_SVC_ES, TZ_ES_INVALIDATE_ICE_KEY)
 
+#define TZ_ES_SET_ICE_KEY_PARAM_ID TZ_SYSCALL_CREATE_PARAM_ID_6( \
+	TZ_SYSCALL_PARAM_TYPE_VAL, TZ_SYSCALL_PARAM_TYPE_BUF_RW, TZ_SYSCALL_PARAM_TYPE_VAL, \
+		TZ_SYSCALL_PARAM_TYPE_BUF_RW, TZ_SYSCALL_PARAM_TYPE_VAL, TZ_SYSCALL_PARAM_TYPE_VAL)
 
-#define TZ_ES_SET_ICE_KEY_PARAM_ID \
-	TZ_SYSCALL_CREATE_PARAM_ID_5( \
-		TZ_SYSCALL_PARAM_TYPE_VAL, \
-		TZ_SYSCALL_PARAM_TYPE_BUF_RW, TZ_SYSCALL_PARAM_TYPE_VAL, \
-		TZ_SYSCALL_PARAM_TYPE_BUF_RW, TZ_SYSCALL_PARAM_TYPE_VAL)
-
-#define TZ_ES_INVALIDATE_ICE_KEY_PARAM_ID \
-	TZ_SYSCALL_CREATE_PARAM_ID_1( \
-	TZ_SYSCALL_PARAM_TYPE_VAL)
+#define TZ_ES_INVALIDATE_ICE_KEY_PARAM_ID TZ_SYSCALL_CREATE_PARAM_ID_2( \
+	TZ_SYSCALL_PARAM_TYPE_VAL, TZ_SYSCALL_PARAM_TYPE_VAL
 
 #define ICE_KEY_SIZE 32
 #define ICE_SALT_SIZE 32
@@ -102,9 +97,30 @@ int qti_pfk_ice_set_key(uint32_t index, uint8_t *key, uint8_t *salt)
 	desc.args[2] = tzbuflen_key;
 	desc.args[3] = virt_to_phys(tzbuf_salt);
 	desc.args[4] = tzbuflen_salt;
+#ifdef CONFIG_SCSI_UFSHCD
+	desc.args[5] = 10;
+#else
+	desc.args[5] = 20;
+#endif
 
+#ifdef CONFIG_SCSI_UFSHCD
+	ret = qcom_ice_setup_ice_hw("ufs", true);
+#else
+	ret = qcom_ice_setup_ice_hw("sdcc", true);
+#endif
+	if (ret) {
+		pr_err("%s: could not enable clocks: 0x%x\n", __func__, ret);
+		return ret;
+	}
 
-	ret = scm_call2_atomic(smc_id, &desc);
+	ret = scm_call2(smc_id, &desc);
+
+#ifdef CONFIG_SCSI_UFSHCD
+	qcom_ice_setup_ice_hw("ufs", false);
+#else
+	qcom_ice_setup_ice_hw("sdcc", false);
+#endif
+
 	pr_debug(" %s , ret = %d\n", __func__, ret);
 	if (ret) {
 		pr_err("%s: Error: 0x%x\n", __func__, ret);
@@ -112,7 +128,7 @@ int qti_pfk_ice_set_key(uint32_t index, uint8_t *key, uint8_t *salt)
 		smc_id = TZ_ES_INVALIDATE_ICE_KEY_ID;
 		desc.arginfo = TZ_ES_INVALIDATE_ICE_KEY_PARAM_ID;
 		desc.args[0] = index;
-		scm_call2_atomic(smc_id, &desc);
+		scm_call2(smc_id, &desc);
 	}
 
 	return ret;
@@ -135,13 +151,23 @@ int qti_pfk_ice_invalidate_key(uint32_t index)
 	desc.arginfo = TZ_ES_INVALIDATE_ICE_KEY_PARAM_ID;
 	desc.args[0] = index;
 
+#ifdef CONFIG_SCSI_UFSHCD
 	ret = qcom_ice_setup_ice_hw("ufs", true);
-	if (ret)
+#else
+	ret = qcom_ice_setup_ice_hw("sdcc", true);
+#endif
+	if (ret) {
 		pr_err("%s: could not enable clocks: 0x%x\n", __func__, ret);
+		return ret;
+	}
 
-	ret = scm_call2_atomic(smc_id, &desc);
+	ret = scm_call2(smc_id, &desc);
 
+#ifdef CONFIG_SCSI_UFSHCD
 	qcom_ice_setup_ice_hw("ufs", false);
+#else
+	qcom_ice_setup_ice_hw("sdcc", false);
+#endif
 
 	pr_debug(" %s , ret = %d\n", __func__, ret);
 	if (ret)

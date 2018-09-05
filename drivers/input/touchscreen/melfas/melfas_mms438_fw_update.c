@@ -234,8 +234,7 @@ int mms_flash_fw(struct mms_ts_info *info, const u8 *fw_data,
 	struct i2c_client *client = info->client;
 	int i;
 	int retires = 3;
-	int ret;
-	int nRet;
+	int nRet = fw_err_download;
 	int nStartAddr;
 	int nWriteLength;
 	int nLast;
@@ -261,7 +260,13 @@ int mms_flash_fw(struct mms_ts_info *info, const u8 *fw_data,
 
 	//Read firmware file
 	fw_hdr = (struct mms_bin_hdr *)fw_data;
-	img = kzalloc(sizeof(*img) * fw_hdr->section_num, GFP_KERNEL);
+	img = vzalloc(sizeof(*img) * fw_hdr->section_num);
+	
+	if (!img) {
+		input_err(true,&client->dev, "%s [ERROR] failed to memory alloc img\n", __func__);
+		nRet = fw_err_file_type;
+		goto ERROR_IMG;
+	}
 
 	//Check firmware file
 	if (memcmp(CHIP_FW_CODE, &fw_hdr->tag[4], 4)) {
@@ -363,9 +368,22 @@ int mms_flash_fw(struct mms_ts_info *info, const u8 *fw_data,
 	offsetStart = offsetStart * 1024;
 
 	//Load firmware data
-	data = kzalloc(sizeof(u8) * fw_hdr->binary_length, GFP_KERNEL);
+	data = vzalloc(sizeof(u8) * fw_hdr->binary_length);
+
+	if (!data) {
+		input_err(true,&client->dev, "%s [ERROR] failed to memory alloc data\n", __func__);
+		nRet = fw_err_file_type;
+		goto EXIT;
+	}
+
 	size = fw_hdr->binary_length;
-	cpydata = kzalloc(ISC_PAGE_SIZE, GFP_KERNEL);
+	cpydata = vzalloc(ISC_PAGE_SIZE);
+	
+	if (!cpydata) {
+		input_err(true,&client->dev, "%s [ERROR] failed to memory alloc cpydata\n", __func__);
+		nRet = fw_err_file_type;
+		goto ERROR_CPYDATA;
+	}
 
 	//Check firmware size
 	if (size % ISC_PAGE_SIZE !=0) {
@@ -425,7 +443,7 @@ int mms_flash_fw(struct mms_ts_info *info, const u8 *fw_data,
 #endif
 			input_err(true, &client->dev, "%s [ERROR] verify page failed\n", __func__);
 
-			ret = -1;
+			nRet = -1;
 			goto ERROR;
 		}
 
@@ -471,10 +489,14 @@ ERROR:
 	input_err(true, &client->dev, "%s [ERROR]\n", __func__);
 
 DONE:
-	kfree(cpydata);
-	kfree(data);
-
+	vfree(cpydata);
+	
+ERROR_CPYDATA:
+	vfree(data);
+	
 EXIT:
-	kfree(img);
+	vfree(img);
+	
+ERROR_IMG:
 	return nRet;
 }

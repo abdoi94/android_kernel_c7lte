@@ -1,4 +1,4 @@
-/* Copyright (c) 2014-2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2014-2016, 2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -50,7 +50,7 @@ DEFINE_MUTEX(XLOG_DUMP_LOCK);
  * number must be greater than print entry to prevent out of bound xlog
  * entry array access.
  */
-#define MDSS_XLOG_ENTRY	(MDSS_XLOG_PRINT_ENTRY * 4)
+#define MDSS_XLOG_ENTRY	(MDSS_XLOG_PRINT_ENTRY * 16)
 #define MDSS_XLOG_MAX_DATA 15
 #define MDSS_XLOG_BUF_MAX 512
 #define MDSS_XLOG_BUF_ALIGN 32
@@ -258,7 +258,7 @@ static void mdss_dump_debug_bus(u32 bus_dump_flag,
 
 		if (*dump_mem) {
 			dump_addr = *dump_mem;
-			pr_info("%s: start_addr:0x%p end_addr:0x%p\n",
+			pr_info("%s: start_addr:0x%pK end_addr:0x%pK\n",
 				__func__, dump_addr, dump_addr + list_size);
 		} else {
 			in_mem = false;
@@ -376,7 +376,7 @@ static void mdss_dump_vbif_debug_bus(u32 bus_dump_flag,
 
 		if (*dump_mem) {
 			dump_addr = *dump_mem;
-			pr_info("%s: start_addr:0x%p end_addr:0x%p\n",
+			pr_info("%s: start_addr:0x%pK end_addr:0x%pK\n",
 				__func__, dump_addr, dump_addr + list_size);
 		} else {
 			in_mem = false;
@@ -410,8 +410,8 @@ static void mdss_dump_vbif_debug_bus(u32 bus_dump_flag,
 	pr_info("========End VBIF Debug bus=========\n");
 }
 
-void mdss_dump_reg(const char *dump_name, u32 reg_dump_flag,
-	char *addr, int len, u32 **dump_mem)
+void mdss_dump_reg(const char *dump_name, u32 reg_dump_flag, char *addr,
+	int len, u32 **dump_mem, bool from_isr)
 {
 	struct mdss_data_type *mdata = mdss_mdp_get_mdata();
 	bool in_log, in_mem;
@@ -436,7 +436,7 @@ void mdss_dump_reg(const char *dump_name, u32 reg_dump_flag,
 
 		if (*dump_mem) {
 			dump_addr = *dump_mem;
-			pr_info("%s: start_addr:0x%p end_addr:0x%p reg_addr=0x%p\n",
+			pr_info("%s: start_addr:0x%pK end_addr:0x%pK reg_addr=0x%pK\n",
 				dump_name, dump_addr, dump_addr + (u32)len * 16,
 				addr);
 		} else {
@@ -445,7 +445,9 @@ void mdss_dump_reg(const char *dump_name, u32 reg_dump_flag,
 		}
 	}
 
-	mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_ON);
+	if (!from_isr)
+		mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_ON);
+
 	for (i = 0; i < len; i++) {
 		u32 x0, x4, x8, xc;
 
@@ -456,10 +458,11 @@ void mdss_dump_reg(const char *dump_name, u32 reg_dump_flag,
 
 #if defined(CONFIG_FB_MSM_MDSS_SAMSUNG)
 		if (in_log)
-			pr_err("%04x : %08x %08x %08x %08x\n", i * 16, x0, x4, x8, xc);
+			pr_err("%04x : %08x %08x %08x %08x\n", i * 16, x0, x4,
+				x8, xc);
 #else
 		if (in_log)
-			pr_info("%p : %08x %08x %08x %08x\n", addr, x0, x4, x8,
+			pr_info("%pK : %08x %08x %08x %08x\n", addr, x0, x4, x8,
 				xc);
 #endif
 
@@ -472,7 +475,9 @@ void mdss_dump_reg(const char *dump_name, u32 reg_dump_flag,
 
 		addr += 16;
 	}
-	mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_OFF);
+
+	if (!from_isr)
+		mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_OFF);
 }
 
 static void mdss_dump_reg_by_ranges(struct mdss_debug_base *dbg,
@@ -496,21 +501,22 @@ static void mdss_dump_reg_by_ranges(struct mdss_debug_base *dbg,
 			len = get_dump_range(&xlog_node->offset,
 				dbg->max_offset);
 			addr = dbg->base + xlog_node->offset.start;
-			pr_debug("%s: range_base=0x%p start=0x%x end=0x%x\n",
+			pr_debug("%s: range_base=0x%pK start=0x%x end=0x%x\n",
 				xlog_node->range_name,
 				addr, xlog_node->offset.start,
 				xlog_node->offset.end);
 			mdss_dump_reg((const char *)xlog_node->range_name,
-				reg_dump_flag, addr, len, &xlog_node->reg_dump);
+				reg_dump_flag, addr, len, &xlog_node->reg_dump,
+				false);
 		}
 	} else {
 		/* If there is no list to dump ranges, dump all registers */
 		pr_info("Ranges not found, will dump full registers");
-		pr_info("base:0x%p len:0x%zu\n", dbg->base, dbg->max_offset);
+		pr_info("base:0x%pK len:0x%zu\n", dbg->base, dbg->max_offset);
 		addr = dbg->base;
 		len = dbg->max_offset;
 		mdss_dump_reg((const char *)dbg->name, reg_dump_flag, addr,
-			len, &dbg->reg_dump);
+			len, &dbg->reg_dump, false);
 	}
 }
 
@@ -588,12 +594,23 @@ static void mdss_xlog_dump_array(struct mdss_debug_base *blk_arr[],
 				mdss_dbg_xlog.enable_reg_dump);
 	}
 #endif
+
+#if defined(CONFIG_FB_MSM_MDSS_SAMSUNG)
+	struct samsung_display_driver_data *vdd = samsung_get_vdd();
+
+	if (mdss_samsung_dsi_te_check(vdd)) {
+		pr_err("%s : recovery need..\n", __func__);
+		return;
+	}
+#endif
+
 	mdss_xlog_dump_all();
 
 #if defined(CONFIG_FB_MSM_MDSS_SAMSUNG)
 	mdss_samsung_dump_regs();
-	mdss_samsung_dsi_dump_regs(0);
-	mdss_samsung_dsi_dump_regs(1);
+	mdss_samsung_dsi_dump_regs(vdd, DSI_CTRL_0);
+	mdss_samsung_dsi_dump_regs(vdd, DSI_CTRL_1);
+	pr_err("dbgbus:%d vbifbus:%d\n", dump_dbgbus, dump_vbif_dbgbus);
 #endif
 
 	if (dump_dbgbus)
@@ -718,6 +735,11 @@ static ssize_t mdss_xlog_dump_read(struct file *file, char __user *buff,
 
 	if (__mdss_xlog_dump_calc_range()) {
 		len = mdss_xlog_dump_entry(xlog_buf, MDSS_XLOG_BUF_MAX);
+		if (len < 0 || len > count) {
+			pr_err("len is more than the size of user buffer\n");
+			return 0;
+		}
+
 		if (copy_to_user(buff, xlog_buf, len))
 			return -EFAULT;
 		*ppos += len;
@@ -729,13 +751,17 @@ static ssize_t mdss_xlog_dump_read(struct file *file, char __user *buff,
 static ssize_t mdss_xlog_dump_write(struct file *file,
 	const char __user *user_buf, size_t count, loff_t *ppos)
 {
+#if defined(CONFIG_FB_MSM_MDSS_SAMSUNG)
+	struct samsung_display_driver_data *vdd = samsung_get_vdd();
+#endif
+
 	mdss_dump_reg_all();
 
 #if defined(CONFIG_FB_MSM_MDSS_SAMSUNG)
-	mdss_samsung_dsi_te_check();
+	mdss_samsung_dsi_te_check(vdd);
 	mdss_samsung_dump_regs();
-	mdss_samsung_dsi_dump_regs(0);
-	mdss_samsung_dsi_dump_regs(1);
+	mdss_samsung_dsi_dump_regs(vdd, DSI_CTRL_0);
+	mdss_samsung_dsi_dump_regs(vdd, DSI_CTRL_1);
 #endif
 
 	mdss_xlog_dump_all();
@@ -795,7 +821,7 @@ int mdss_create_xlog_debug(struct mdss_debug_data *mdd)
 		mdss_dbg_xlog.enable_reg_dump);
 
 #if defined(CONFIG_FB_MSM_MDSS_SAMSUNG)
-	mdss_dbg_xlog.xlog_enable = MDSS_XLOG_DEFAULT | MDSS_XLOG_IOMMU \
+	mdss_dbg_xlog.xlog_enable = MDSS_XLOG_DEFAULT | MDSS_XLOG_IOMMU
 		| MDSS_XLOG_DBG | MDSS_XLOG_ALL;
 #endif
 

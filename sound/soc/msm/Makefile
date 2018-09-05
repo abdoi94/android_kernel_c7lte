@@ -21,13 +21,14 @@ snd-soc-msm8994-objs := msm8994.o
 obj-$(CONFIG_SND_SOC_MSM8994) += snd-soc-msm8994.o
 
 # for MSM8996 sound card driver
-snd-soc-msm8996-objs := msm8996.o apq8096-auto.o
+snd-soc-msm8996-objs := msm8996.o apq8096-auto.o apq8096-i2c.o
 obj-$(CONFIG_SND_SOC_MSM8996) += snd-soc-msm8996.o
 
 # for MSM 8x16/8952 common obj for sound card driver
 snd-soc-msm8x16-audio-pinctl-objs := msm-audio-pinctrl.o
 obj-$(CONFIG_SND_SOC_MSM8X16) += snd-soc-msm8x16-audio-pinctl.o
 obj-$(CONFIG_SND_SOC_MSM8X16_RT5659) += snd-soc-msm8x16-audio-pinctl.o
+obj-$(CONFIG_SND_SOC_MSM8X16_RT5665) += snd-soc-msm8x16-audio-pinctl.o
 
 # for MSM 8x16/8952 sound card driver
 snd-soc-msm8x16-objs := msm8952.o
@@ -37,14 +38,22 @@ obj-$(CONFIG_SND_SOC_MSM8X16) += snd-soc-msm8x16.o
 snd-soc-msm8x16-rt5659-objs := msm8952_rt5659.o
 obj-$(CONFIG_SND_SOC_MSM8X16_RT5659) += snd-soc-msm8x16-rt5659.o
 
-# for MDM Californium sound card driver
-snd-soc-mdmcalifornium-objs := mdmcalifornium.o
-obj-$(CONFIG_SND_SOC_MDMCALIFORNIUM) += snd-soc-mdmcalifornium.o
+# for MSM 8x16/8952 rt5665 sound card driver
+snd-soc-msm8x16-rt5665-objs := msm8952_rt5665.o
+obj-$(CONFIG_SND_SOC_MSM8X16_RT5665) += snd-soc-msm8x16-rt5665.o
+
+# for MDM 9650 sound card driver
+snd-soc-mdm9650-objs := mdm9650.o msm-audio-pinctrl.o
+obj-$(CONFIG_SND_SOC_MDM9650) += snd-soc-mdm9650.o
 
 # for MDM 9607 sound card driver
 snd-soc-mdm9607-objs := mdm9607.o
 obj-$(CONFIG_SND_SOC_MDM9607) += snd-soc-mdm9607.o
 
 # for MSM 8909 sound card driver
-snd-soc-msm8909-objs := msm8952.o msm-audio-pinctrl.o
+snd-soc-msm8909-objs := msm8952.o msm-audio-pinctrl.o apq8009-i2s-ext-codec.o
 obj-$(CONFIG_SND_SOC_MSM8909) += snd-soc-msm8909.o
+
+# for MDM9640 sound card driver
+snd-soc-mdm9640-objs := mdm9640.o
+obj-$(CONFIG_SND_SOC_MDM9640) += snd-soc-mdm9640.o

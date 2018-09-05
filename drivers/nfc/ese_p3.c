@@ -48,13 +48,14 @@
 #include <linux/spi/spidev.h>
 #include <linux/clk.h>
 #include <linux/wakelock.h>
+#include <linux/err.h>
+#include <linux/mutex.h>
+#include <linux/spi/spidev.h>
+#include <asm/uaccess.h>
 
 #ifdef CONFIG_SEC_FACTORY
 #undef CONFIG_ESE_SECURE
 #endif
-
-/* Undef if want to keep eSE Power LDO ALWAYS ON */
-#define FEATURE_ESE_POWER_ON_OFF
 
 #define SPI_DEFAULT_SPEED 6500000L
 
@@ -109,146 +110,177 @@ struct p3_data {
 	struct wake_lock ese_lock;
 #endif
 	unsigned long speed;
-	int vdd_1p8_gpio;
-	const char *vdd_1p8; ///?
-	struct regulator *regulator_vdd_1p8;
+	unsigned int ese_pvdd_en;
+	const char *vdd_1p8;
+	
 #ifdef CONFIG_ESE_SECURE
-		struct clk *ese_spi_pclk;
-		struct clk *ese_spi_sclk;
+	struct clk *ese_spi_pclk;
+	struct clk *ese_spi_sclk;
 #endif
 	const char *ap_vendor;
 };
 
 #ifdef CONFIG_ESE_SECURE
-static int p3_suspend(void)
+/**
+ * ese_spi_clk_max_rate: finds the nearest lower rate for a clk
+ * @clk the clock for which to find nearest lower rate
+ * @rate clock frequency in Hz
+ * @return nearest lower rate or negative error value
+ *
+ * Public clock API extends clk_round_rate which is a ceiling function. This
+ * function is a floor function implemented as a binary search using the
+ * ceiling function.
+ */
+static long p3_spi_clk_max_rate(struct clk *clk, unsigned long rate)
 {
-	u64 r0 = 0, r1 = 1, r2 = 0, r3 = 0;
-	int ret = 0;
+	long lowest_available, nearest_low, step_size, cur;
+	long step_direction = -1;
+	long guess = rate;
+	int  max_steps = 10;
 
-	r0 = (0x83000032);
-	ret = exynos_smc(r0, r1, r2, r3);
+	cur =  clk_round_rate(clk, rate);
+	if (cur == rate)
+		return rate;
 
-	if (ret)
-		P3_ERR_MSG("P3 check suspend status! 0x%X\n", ret);
+	/* if we got here then: cur > rate */
+	lowest_available =  clk_round_rate(clk, 0);
+	if (lowest_available > rate)
+		return -EINVAL;
 
-	return 0;
+	step_size = (rate - lowest_available) >> 1;
+	nearest_low = lowest_available;
+
+	while (max_steps-- && step_size) {
+		guess += step_size * step_direction;
+
+		cur =  clk_round_rate(clk, guess);
+
+		if ((cur < rate) && (cur > nearest_low))
+		        nearest_low = cur;
+
+		/*
+		 * if we stepped too far, then start stepping in the other
+		 * direction with half the step size
+		 */
+		if (((cur > rate) && (step_direction > 0))
+		 || ((cur < rate) && (step_direction < 0))) {
+			step_direction = -step_direction;
+			step_size >>= 1;
+		}
+	}
+	return nearest_low;
 }
 
-static int p3_resume(void)
+static void p3_spi_clock_set(struct p3_data *data, unsigned long speed)
 {
-	u64 r0 = 0, r1 = 1, r2 = 0, r3 = 0;
-	int ret = 0;
-
-	r0 = (0x83000033);
-	ret = exynos_smc(r0, r1, r2, r3);
-
-	if (ret)
-		P3_ERR_MSG("P3 check resume status! 0x%X\n", ret);
-
-	return 0;
-}
-
-static int p3_clk_prepare(struct p3_data *data)
-{
-	struct clk *ese_spi_pclk, *ese_spi_sclk;
-	/* clk name form clk-exynos8890.c */
-	ese_spi_pclk = clk_get(NULL, "ese-spi-pclk");/*This can move to parsedt */
-
-	if (IS_ERR(ese_spi_pclk)) {
-		pr_err("Can't get ese_spi_pclk\n");
-		return -1;
+	long rate;
+	if (!strcmp(data->ap_vendor, "qualcomm")) {
+		/* finds the nearest lower rate for a clk */
+		rate = p3_spi_clk_max_rate(data->ese_spi_sclk, speed);
+		if (rate < 0) {
+			pr_err("%s: no match found for requested clock: %lu",
+				__func__, speed);
+			return;
+		}
+		speed = rate;
+		/*pr_info("%s speed:%lu \n", __func__, speed);*/
+	} else if (!strcmp(data->ap_vendor, "slsi")) {
+		/* There is half-multiplier */
+		speed =  speed * 2;
 	}
 
-	ese_spi_sclk = clk_get(NULL, "ese-spi-sclk");
-	if (IS_ERR(ese_spi_sclk)) {
-		pr_err("Can't get ese_spi_sclk\n");
-		return -1;
+	clk_set_rate(data->ese_spi_sclk, speed);
+}
+
+static int p3_clk_control(struct p3_data *data, bool onoff)
+{
+	static bool old_value;
+
+	if (old_value == onoff)
+		return 0;
+
+	if (onoff == true) {
+		p3_spi_clock_set(data, SPI_DEFAULT_SPEED);
+		clk_prepare_enable(data->ese_spi_pclk);
+		clk_prepare_enable(data->ese_spi_sclk);
+		usleep_range(5000, 5100);
+		pr_info("%s: clock:%lu\n", __func__, clk_get_rate(data->ese_spi_sclk));
+	} else {
+		clk_disable_unprepare(data->ese_spi_pclk);
+		clk_disable_unprepare(data->ese_spi_sclk);
 	}
+	old_value = onoff;
 
-	clk_prepare_enable(ese_spi_pclk);
-	clk_prepare_enable(ese_spi_sclk);
-	clk_set_rate(ese_spi_sclk, data->speed *2);
-	usleep_range(5000, 5100);
-	pr_info("%s  clock*2:%lu\n", __func__, clk_get_rate(ese_spi_sclk));
-
-	clk_put(ese_spi_pclk);
-	clk_put(ese_spi_sclk);
-
+	pr_info("%s: clock %s\n", __func__, onoff ? "enabled" : "disabled");
 	return 0;
 }
 
-static int p3_clk_unprepare(struct p3_data *data)
+static int p3_clk_setup(struct device *dev, struct p3_data *data)
 {
-	struct clk *ese_spi_pclk, *ese_spi_sclk;
+	data->ese_spi_pclk = clk_get(dev, "pclk");
+	if (IS_ERR(data->ese_spi_pclk)) {
+		pr_err("%s: Can't get %s\n", __func__, "pclk");
+		data->ese_spi_pclk = NULL;
+		goto err_pclk_get;
+	}
 
-	ese_spi_pclk = clk_get(NULL, "ese-spi-pclk");
-	if (IS_ERR(ese_spi_pclk))
-		pr_err("Can't get ese_spi_pclk\n");
-
-	ese_spi_sclk = clk_get(NULL, "ese-spi-sclk");
-	if (IS_ERR(ese_spi_sclk))
-		pr_err("Can't get ese_spi_sclk\n");
-
-	clk_disable_unprepare(ese_spi_pclk);
-	clk_disable_unprepare(ese_spi_sclk);
-
-	clk_put(ese_spi_pclk);
-	clk_put(ese_spi_sclk);
-	pr_info("%s: finished.\n",__func__);
-
+	data->ese_spi_sclk = clk_get(dev, "sclk");
+	if (IS_ERR(data->ese_spi_sclk)) {
+		pr_err("%s: Can't get %s\n", __func__, "sclk");
+		data->ese_spi_sclk = NULL;
+		goto err_sclk_get;
+	}
 	return 0;
+
+err_sclk_get:
+	clk_put(data->ese_spi_pclk);
+err_pclk_get:
+	return -EPERM;
 }
 #endif
 
 static int p3_regulator_onoff(struct p3_data *data, int onoff)
 {
 	int rc = 0;
-	static bool old_value;
+	struct regulator *regulator_vdd_1p8;
 
-	if (!data->regulator_vdd_1p8) {
+	if (!data->vdd_1p8) {
 		pr_err("%s No vdd LDO name!\n", __func__);
 		return -ENODEV;
 	}
-	if (old_value == onoff) {
-		pr_err("%s the same with old value.\n", __func__);
-		return 0;
+
+	regulator_vdd_1p8 = regulator_get(NULL, data->vdd_1p8);
+	pr_err("%s %s\n", __func__, data->vdd_1p8);
+
+	if (IS_ERR(regulator_vdd_1p8) || regulator_vdd_1p8 == NULL) {
+		P3_ERR_MSG("%s - vdd_1p8 regulator_get fail\n", __func__);
+		return -ENODEV;
 	}
 
+	P3_DBG_MSG("%s - onoff = %d\n", __func__, onoff);
 	if (onoff == 1) {
-		rc = regulator_enable(data->regulator_vdd_1p8);
+		rc = regulator_enable(regulator_vdd_1p8);
 		if (rc) {
 			P3_ERR_MSG("%s - enable vdd_1p8 failed, rc=%d\n",
 				__func__, rc);
-			goto err_ret;
+			goto done;
 		}
 		msleep(20);
 	} else {
-		rc = regulator_disable(data->regulator_vdd_1p8);
+		rc = regulator_disable(regulator_vdd_1p8);
 		if (rc) {
 			P3_ERR_MSG("%s - disable vdd_1p8 failed, rc=%d\n",
 				__func__, rc);
-			goto err_ret;
+			goto done;
 		}
 	}
 
-	old_value = onoff;
-err_ret:
-	regulator_put(data->regulator_vdd_1p8);
+	/*data->regulator_is_enable = (u8)onoff;*/
+
+done:
+	regulator_put(regulator_vdd_1p8);
 
 	return rc;
-}
-
-static int p3_power_onoff(struct p3_data *data, int onoff)
-{
-	int ret = 0;
-	if (gpio_is_valid(data->vdd_1p8_gpio))
-		ret = gpio_direction_output(data->vdd_1p8_gpio, onoff);
-	else if (data->regulator_vdd_1p8)
-		ret = p3_regulator_onoff(data, onoff);
-
-	if (ret >= 0)
-		P3_INFO_MSG("%s - onoff = %d\n", __func__, onoff);
-	return ret;
 }
 
 #ifndef CONFIG_ESE_SECURE
@@ -298,7 +330,7 @@ static int p3_xfer(struct p3_data *p3_device, struct p3_ioctl_transfer *tr)
 	pr_debug("%s p3_xfer,length=%d\n", __func__, tr->len);
 	return status;
 
-} /* vfsspi_xfer */
+}
 
 static int p3_rw_spi_message(struct p3_data *p3_device,
 				 unsigned long arg)
@@ -381,24 +413,18 @@ static int spip3_open(struct inode *inode, struct file *filp)
 #endif
 
 #ifdef CONFIG_ESE_SECURE
-		ret = p3_clk_prepare(p3_dev);
-		if (ret < 0)
-			P3_ERR_MSG("%s: Unable to enable spi clk\n",
-					__func__);
-		p3_resume();
-#else
-		if(1/*s3c64xx_spi_change_gpio(ESE_DEFAULT) < 0*/) {
-			P3_ERR_MSG("fail to set pinctrl default\n"); }
-		else
-			P3_ERR_MSG("ok to set pinctrl default\n");
+	p3_clk_control(p3_dev, true); 
 #endif
 
-#ifdef FEATURE_ESE_POWER_ON_OFF
-	ret = p3_power_onoff(p3_dev, 1);
-	if (ret < 0)
-		P3_ERR_MSG(" test: failed to turn on LDO()\n");
-	usleep_range(2000, 2500);
-#endif
+	if (of_get_property(p3_dev->p3_device.parent->of_node, "ese,ldo_control", NULL)) {
+		ret = p3_regulator_onoff(p3_dev, 1);
+		if (ret < 0)
+			P3_ERR_MSG(" test: failed to turn on LDO()\n");
+	} else {
+		gpio_direction_output(p3_dev->ese_pvdd_en, 1);
+		P3_INFO_MSG("%s pvdd-gpio has set.\n", __func__);
+		usleep_range(10000, 10500);
+	}
 
 	filp->private_data = p3_dev;
 
@@ -435,20 +461,15 @@ static int spip3_release(struct inode *inode, struct file *filp)
 	if (!p3_dev->users) {
 		p3_dev->device_opened = false;
 
-#ifdef FEATURE_ESE_POWER_ON_OFF
-		ret = p3_power_onoff(p3_dev, 0);
-		if (ret < 0)
-			P3_ERR_MSG(" test: failed to turn off LDO()\n");
-
-#endif
+		if (of_get_property(p3_dev->p3_device.parent->of_node, "ese,ldo_control", NULL)) {
+			ret = p3_regulator_onoff(p3_dev, 0);
+			if (ret < 0)
+				P3_ERR_MSG(" test: failed to turn off LDO()\n");
+		} else {
+			gpio_direction_output(p3_dev->ese_pvdd_en, 0);
+		}
 #ifdef CONFIG_ESE_SECURE
-		ret = p3_clk_unprepare(p3_dev);
-		if (ret < 0)
-			P3_ERR_MSG("%s: couldn't disable spi clks\n", __func__);
-		p3_suspend();
-#else
-		if(1/*s3c64xx_spi_change_gpio(ESE_POWER_OFF) < 0*/)
-			P3_ERR_MSG("fail to set pinctrl power_off\n");
+		p3_clk_control(p3_dev, false);
 #endif
 	}
 	mutex_unlock(&device_list_lock);
@@ -476,24 +497,13 @@ static long spip3_ioctl(struct file *filp, unsigned int cmd,
 	switch (cmd) {
 	case P3_SET_DBG:
 		debug_level = (unsigned char)arg;
-		P3_DBG_MSG(KERN_INFO"[NXP-P3] -  Debug level %d", debug_level);
+		P3_DBG_MSG("Debug level %d", debug_level);
 		break;
 	case P3_ENABLE_SPI_CLK:
-		P3_DBG_MSG("%s P3_ENABLE_SPI_CLK\n", __func__);
-#ifdef CONFIG_ESE_SECURE
-		ret = p3_clk_prepare(data);
-		if (ret < 0)
-			P3_ERR_MSG("%s: Unable to enable spi clk\n",
-					__func__);
-#endif
+		P3_DBG_MSG("%s P3_ENABLE_SPI_CLK. No Action.\n", __func__);
 		break;
 	case P3_DISABLE_SPI_CLK:
-		P3_DBG_MSG("%s P3_DISABLE_SPI_CLK\n", __func__);
-#ifdef CONFIG_ESE_SECURE
-		ret = p3_clk_unprepare(data);
-		if (ret < 0)
-			P3_ERR_MSG("%s: couldn't disable spi clks\n", __func__);
-#endif
+		P3_DBG_MSG("%s P3_DISABLE_SPI_CLK. No Action.\n", __func__);
 		break;
 #ifndef CONFIG_ESE_SECURE
 	case P3_RW_SPI_DATA:
@@ -622,35 +632,35 @@ static const struct file_operations spip3_dev_fops = {
 static int p3_parse_dt(struct device *dev, struct p3_data *data)
 {
 	struct device_node *np = dev->of_node;
-	int ret = 0;
+	int ret = -1;
 
-	data->vdd_1p8_gpio = of_get_named_gpio(np, "p3-vdd_1p8-gpio", 0);
-	if (gpio_is_valid(data->vdd_1p8_gpio)) {
-		ret = gpio_request(data->vdd_1p8_gpio, "ese_vdd_1p8_gpio");
-		if (ret) {
-			P3_ERR_MSG("%s - failed to request ese_vdd_1p8_gpio\n", __func__);
-			return -EPERM;
+	if (of_get_property(dev->of_node, "ese,ldo_control", NULL)) {
+		if (of_property_read_string(np, "ese,pvdd_ldo",/*ldo name*/
+					&data->vdd_1p8) < 0) {
+			pr_err("%s - get nfc_pvdd error\n", __func__);
+			data->vdd_1p8 = NULL;
 		}
-		else
-			P3_INFO_MSG("%s: vdd_1p8-gpio - %d request success.\n",
-				__func__, data->vdd_1p8_gpio);
-	}
-
-	if (!of_property_read_string(np, "p3-vdd-1p8",
-		&data->vdd_1p8) < 0) {		
-		P3_INFO_MSG("%s: regulator name - %s\n", __func__, data->vdd_1p8);
-		data->regulator_vdd_1p8 = regulator_get(NULL, data->vdd_1p8);
-
-		if (IS_ERR(data->regulator_vdd_1p8)) {
-			P3_ERR_MSG("%s - %s regulator_get fail\n", __func__, data->vdd_1p8);
-			return -EPERM;
+	}else { /* GPIO*/
+		data->ese_pvdd_en = of_get_named_gpio(np, "ese,pvdd_gpio", 0);
+		if (data->ese_pvdd_en < 0) {
+			P3_ERR_MSG("%s - fail get nfc_ese_pwr_req\n", __func__);
+			return -1;
+		} else {
+			ret = gpio_request(data->ese_pvdd_en, "ese_pvdd_en");
+			if (ret) {
+				P3_ERR_MSG("%s - failed to request ese_pvdd_en\n", __func__);
+				return -1;
+			}
 		}
 	}
 
-	if (!of_property_read_string(np, "p3-ap_vendor",
+	if (!of_property_read_string(np, "ese,ap_vendor",
 		&data->ap_vendor)) {
-		P3_INFO_MSG("%s: ap_vendor - %s\n", __func__, data->ap_vendor);
-	}
+		pr_info("%s: ap_vendor - %s\n", __func__, data->ap_vendor);
+	} else
+		data->ap_vendor = "default";
+
+	P3_DBG_MSG("%s: ese_pvdd_en=%d\n", __func__, data->ese_pvdd_en);
 
 	return ret;
 }
@@ -676,21 +686,32 @@ static int spip3_probe(struct spi_device *spi)
 		goto p3_parse_dt_failed;
 	}
 
-	ret = p3_power_onoff(data, 1);
-	if (ret) {
-		P3_ERR_MSG("%s - Failed to enable regulator\n", __func__);
-		goto p3_parse_dt_failed;
+	if (of_get_property(spi->dev.of_node, "ese,ldo_control", NULL)) {
+		ret = p3_regulator_onoff(data, 0);
+		if (ret < 0) {
+			P3_ERR_MSG("%s failed to turn off LDO. [%d]\n",
+					__func__, ret);
+			goto err_ldo_off;
+		}
+	} else {
+		gpio_direction_output(data->ese_pvdd_en, 0);
+		P3_INFO_MSG("%s pvdd-gpio has set as 0.\n", __func__);
 	}
 
-#ifndef CONFIG_ESE_SECURE
 	spi->bits_per_word = 8;
 	spi->mode = SPI_MODE_0;
 	spi->max_speed_hz = SPI_DEFAULT_SPEED;
+#ifndef CONFIG_ESE_SECURE
 	ret = spi_setup(spi);
 	if (ret < 0) {
 		P3_ERR_MSG("failed to do spi_setup()\n");
 		goto p3_parse_dt_failed;
 	}
+#else
+	pr_info("%s: eSE Secured system\n", __func__);
+	ret = p3_clk_setup(&spi->dev, data);
+	if (ret)
+		P3_ERR_MSG("%s - Failed to do clk_setup\n", __func__);
 #endif
 	data->speed = SPI_DEFAULT_SPEED;
 	data->spi = spi;
@@ -717,29 +738,12 @@ static int spip3_probe(struct spi_device *spi)
 		goto err_misc_regi;
 	}
 
-#ifdef FEATURE_ESE_POWER_ON_OFF
-	ret = p3_power_onoff(data, 0);
-	if (ret < 0)
-	{
-		P3_ERR_MSG("%s failed to turn off LDO. [%d]\n",
-				__func__, ret);
-		goto err_ldo_off;
-	}
-#endif
-#ifndef CONFIG_ESE_SECURE
-	if(1/*s3c64xx_spi_change_gpio(ESE_POWER_OFF) < 0*/) {
-		P3_ERR_MSG("fail to set pinctrl power_off\n");
-	} else
-		P3_DBG_MSG("ok to set pinctrl off \n");
-#endif
-
 	P3_INFO_MSG("%s finished...\n", __func__);
+
 	return ret;
 
-#ifdef FEATURE_ESE_POWER_ON_OFF
 	err_ldo_off:
 	misc_deregister(&data->p3_device);
-#endif
 	err_misc_regi:
 #ifdef FEATURE_ESE_WAKELOCK
 	wake_lock_destroy(&data->ese_lock);
@@ -759,8 +763,8 @@ static int spip3_remove(struct spi_device *spi)
 	P3_DBG_MSG("Entry : %s\n", __func__);
 	if (p3_dev == NULL) {
 		P3_ERR_MSG("%s p3_dev is null!\n", __func__);
-		return 0;
-	}
+	return 0;
+}
 
 #ifdef FEATURE_ESE_WAKELOCK
 	wake_lock_destroy(&p3_dev->ese_lock);
@@ -797,15 +801,9 @@ static struct spi_driver spip3_driver = {
 
 static int __init spip3_dev_init(void)
 {
-	debug_level = P3_FULL_DEBUG;
-
 	P3_INFO_MSG("Entry : %s\n", __func__);
-#if (!defined(CONFIG_ESE_FACTORY_ONLY) || defined(CONFIG_SEC_FACTORY))
 	return spi_register_driver(&spip3_driver);
-#else
-	return -1;
-#endif
-}
+	}
 
 static void __exit spip3_dev_exit(void)
 {
@@ -819,5 +817,3 @@ module_exit(spip3_dev_exit);
 MODULE_AUTHOR("Sec");
 MODULE_DESCRIPTION("ese SPI driver");
 MODULE_LICENSE("GPL");
-
-/** @} */

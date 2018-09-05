@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2015 TRUSTONIC LIMITED
+ * Copyright (c) 2013-2017 TRUSTONIC LIMITED
  * All Rights Reserved.
  *
  * This program is free software; you can redistribute it and/or
@@ -15,7 +15,7 @@
 #define _MC_PLATFORM_H_
 
 /* MobiCore Interrupt for Qualcomm (DT IRQ has priority if present) */
-#define MC_INTR_SSIQ	351
+#define MC_INTR_SSIQ	280
 
 /* Use SMC for fastcalls */
 #define MC_SMC_FASTCALL

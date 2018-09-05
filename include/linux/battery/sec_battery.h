@@ -36,15 +36,29 @@
 #if defined(CONFIG_VBUS_NOTIFIER)
 #include <linux/vbus_notifier.h>
 #endif
+#if defined(CONFIG_BATTERY_CISD)
+#include <linux/battery/sec_cisd.h>
+#endif
+
 #define SEC_BAT_CURRENT_EVENT_NONE					0x0000
 #define SEC_BAT_CURRENT_EVENT_AFC					0x0001
 #define SEC_BAT_CURRENT_EVENT_LOW_TEMP_SWELLING		0x0010
 #define SEC_BAT_CURRENT_EVENT_HIGH_TEMP_SWELLING	0x0020
+#if defined(CONFIG_ENABLE_100MA_CHARGING_BEFORE_USB_CONFIGURED)
+#define SEC_BAT_CURRENT_EVENT_USB_100MA			0x0040
+#else
+#define SEC_BAT_CURRENT_EVENT_USB_100MA			0x0000
+#endif
+#define SEC_BAT_CURRENT_EVENT_LOW_TEMP 			0x0080
+#define SEC_BAT_CURRENT_EVENT_USB_SUPER			0x0100
 
 #define SIOP_EVENT_NONE 	0x0000
 #define SIOP_EVENT_WPC_CALL 	0x0001
 
-#if defined(CONFIG_CHARGING_VZWCONCEPT)
+#if defined(CONFIG_SEC_FACTORY)
+#define STORE_MODE_CHARGING_MAX 80
+#define STORE_MODE_CHARGING_MIN 70
+#elif defined(CONFIG_CHARGING_VZWCONCEPT)
 #define STORE_MODE_CHARGING_MAX 35
 #define STORE_MODE_CHARGING_MIN 30
 #else
@@ -67,7 +81,22 @@
 #define SIOP_HV_INPUT_LIMIT_CURRENT                1200
 #define SIOP_HV_CHARGING_LIMIT_CURRENT             1000
 
+#if defined(CONFIG_CCIC_NOTIFIER)
+#define BATT_MISC_EVENT_UNDEFINED_RANGE_TYPE	0x80000000
+#else
 #define BATT_MISC_EVENT_UNDEFINED_RANGE_TYPE	0x00000001
+#endif
+#define BATT_MISC_EVENT_WIRELESS_BACKPACK_TYPE	0x00000002
+#define BATT_MISC_EVENT_TIMEOUT_OPEN_TYPE	0x00000004
+#define BATT_MISC_EVENT_CISD			0x00000010
+
+#if defined(CONFIG_BATTERY_SWELLING)
+enum swelling_mode_state {
+		SWELLING_MODE_NONE = 0,
+		SWELLING_MODE_CHARGING,
+		SWELLING_MODE_FULL,
+};
+#endif
 
 struct adc_sample_info {
 	unsigned int cnt;
@@ -92,6 +121,8 @@ struct sec_battery_info {
 #if defined(CONFIG_VBUS_NOTIFIER)
 	struct notifier_block vbus_nb;
 #endif
+	bool safety_timer_set;
+	bool lcd_status;
 
 	int status;
 	int health;
@@ -107,6 +138,11 @@ struct sec_battery_info {
 	int current_adc;
 
 	unsigned int capacity;			/* SOC (%) */
+	unsigned int input_voltage;		/* CHGIN/WCIN input voltage (V) */
+	unsigned int charge_power;		/* charge power (mW) */
+	unsigned int max_charge_power;		/* max charge power (mW) */
+	unsigned int pd_max_charge_power;	/* max charge power for pd (mW) */
+	unsigned int aicl_current;
 
 	struct mutex adclock;
 	struct adc_sample_info	adc_sample[ADC_CH_COUNT];
@@ -126,6 +162,10 @@ struct sec_battery_info {
 	struct delayed_work polling_work;
 	struct alarm polling_alarm;
 	ktime_t last_poll_time;
+
+#if defined(CONFIG_BATTERY_CISD)
+	struct cisd cisd;
+#endif	
 
 	/* battery check */
 	unsigned int check_count;
@@ -147,6 +187,9 @@ struct sec_battery_info {
 	unsigned long wc_heating_start_time;
 	unsigned long wc_heating_passed_time;
 	unsigned int wc_heat_limit;
+
+	unsigned long lcd_on_total_time;
+	unsigned long lcd_on_time;
 
 	/* HV charging , Prevent heat up and Scald */
 	bool hv_overheating;
@@ -193,6 +236,7 @@ struct sec_battery_info {
 	bool is_jig_on;
 	int wdt_kick_disable;
 	int cable_type;
+	int vbus_chg_by_siop;
 	int muic_cable_type;
 #if defined(CONFIG_VBUS_NOTIFIER)
 	int muic_vbus_status;
@@ -230,6 +274,7 @@ struct sec_battery_info {
 	struct mutex iolock;
 	int wired_input_current;
 	int wireless_input_current;
+	int input_current;
 	int charging_current;
 	int topoff_current;
 	unsigned int current_event;
@@ -283,9 +328,7 @@ struct sec_battery_info {
 #endif
 	bool charging_block;
 #if defined(CONFIG_BATTERY_SWELLING)
-	bool swelling_mode;
-	unsigned long swelling_block_start;
-	unsigned long swelling_block_passed;
+	unsigned int swelling_mode;
 	int swelling_full_check_cnt;
 #endif
 #if defined(CONFIG_AFC_CHARGER_MODE)
@@ -295,6 +338,9 @@ struct sec_battery_info {
 	int timetofull;
 	bool complete_timetofull;
 	struct delayed_work timetofull_work;
+#endif
+#if defined(CONFIG_USB_TYPEC_MANAGER_NOTIFIER)
+	struct delayed_work slowcharging_work;
 #endif
 #if defined(CONFIG_BATTERY_AGE_FORECAST)
 	int batt_cycle;
@@ -306,7 +352,13 @@ struct sec_battery_info {
 #endif
 	bool input_current_step_up;
 
+	bool stop_timer;
+	unsigned long prev_safety_time;
+	unsigned long expired_time;
+	unsigned long cal_safety_time;
+
 	struct mutex misclock;
+	struct mutex current_eventlock;
 	unsigned int misc_event;
 	unsigned int prev_misc_event;
 	struct delayed_work misc_event_work;
@@ -427,6 +479,7 @@ enum {
 #if defined(CONFIG_SW_SELF_DISCHARGING)
 	BATT_SW_SELF_DISCHARGING,
 #endif
+	SAFETY_TIMER_SET,
 	CHECK_SLAVE_CHG,
 	BATT_INBAT_WIRELESS_CS100,
 	HMT_TA_CONNECTED,
@@ -436,6 +489,9 @@ enum {
 	FG_FULL_VOLTAGE,
 	FG_FULLCAPNOM,
 	BATTERY_CYCLE,
+#if defined(CONFIG_BATTERY_AGE_FORECAST_DETACHABLE)
+	BATT_AFTER_MANUFACTURED,
+#endif
 #endif
 	BATT_WPC_TEMP,
 	BATT_WPC_TEMP_ADC,
@@ -477,6 +533,12 @@ enum {
 	BATT_EXT_DEV_CHG,
 	BATT_WDT_CONTROL,
 	MODE,
+	CISD_FULLCAPREP_MAX,
+#if defined(CONFIG_BATTERY_CISD)
+	CISD_DATA,
+	CISD_DATA_JSON,
+	CISD_WIRE_COUNT,
+#endif
 };
 
 enum {
@@ -495,6 +557,11 @@ extern void adc_exit(struct sec_battery_info *battery);
 extern void sec_bat_reset_step_charging(struct sec_battery_info *battery);
 extern void sec_step_charging_init(struct sec_battery_info *battery, struct device *dev);
 extern bool sec_bat_check_step_charging(struct sec_battery_info *battery);
+#endif
+
+#if defined(CONFIG_BATTERY_CISD)
+extern bool sec_bat_cisd_check(struct sec_battery_info *battery);
+extern void sec_battery_cisd_init(struct sec_battery_info *battery);
 #endif
 
 #if defined(CONFIG_UPDATE_BATTERY_DATA)

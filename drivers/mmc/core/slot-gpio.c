@@ -46,10 +46,11 @@ static irqreturn_t mmc_gpio_cd_irqt(int irq, void *dev_id)
 
 		host->trigger_card_event = true;
 
-		if (!status)
-			mmc_detect_change(host, 0);
-		else
-			mmc_detect_change(host, msecs_to_jiffies(200));
+		if (host->card_detect_cnt < 0x7FFFFFFF)
+			host->card_detect_cnt++;
+
+		/* Schedule a card detection after a debounce timeout */
+		mmc_detect_change(host, msecs_to_jiffies(200));
 	}
 
 	return IRQ_HANDLED;

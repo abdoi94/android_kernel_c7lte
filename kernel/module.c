@@ -82,9 +82,10 @@
 #include <linux/kobject.h>
 #include <linux/spinlock.h>
 
-#define CONFIG_LKMAUTH_SECONDWAY
-#ifdef CONFIG_LKMAUTH_SECONDWAY
+#ifdef CONFIG_64BIT
 #define LKM_MAGIC 0x1122334444332211
+#else
+#define LKM_MAGIC 0x11223344
 #endif
 
 #define QSEECOM_ALIGN_SIZE  0x40
@@ -129,7 +130,11 @@ typedef enum
 typedef struct lkmauth_req_s
 {
   lkmauth_cmd_type cmd_id;
+#ifdef CONFIG_64BIT
   unsigned long long module_addr_start;
+#else
+  u32 module_addr_start;
+#endif
   u32 module_len;
   u32 min;
   u32 max;
@@ -1004,11 +1009,15 @@ void symbol_put_addr(void *addr)
 	if (core_kernel_text(a))
 		return;
 
-	/* module_text_address is safe here: we're supposed to have reference
-	 * to module from symbol_get, so it can't go away. */
+	/*
+	 * Even though we hold a reference on the module; we still need to
+	 * disable preemption in order to safely traverse the data structure.
+	 */
+	preempt_disable();
 	modaddr = __module_text_address(a);
 	BUG_ON(!modaddr);
 	module_put(modaddr);
+	preempt_enable();
 }
 EXPORT_SYMBOL_GPL(symbol_put_addr);
 
@@ -2414,7 +2423,7 @@ static void layout_symtab(struct module *mod, struct load_info *info)
 
 	/* We'll tack temporary mod_kallsyms on the end. */
 	mod->init_size = ALIGN(mod->init_size,
-				      __alignof__(struct mod_kallsyms));
+			       __alignof__(struct mod_kallsyms));
 	info->mod_kallsyms_init_off = mod->init_size;
 	mod->init_size += sizeof(struct mod_kallsyms);
 	mod->init_size = debug_align(mod->init_size);
@@ -2472,9 +2481,7 @@ static void add_kallsyms(struct module *mod, const struct load_info *info)
 #endif /* CONFIG_KALLSYMS */
 
 #ifdef	CONFIG_TIMA_LKMAUTH
-#ifdef CONFIG_LKMAUTH_SECONDWAY
 static DEFINE_SPINLOCK(lkm_va_to_pa_lock);
-#endif
 extern pid_t pid_from_lkm;
 #define LKMAUTH_RETRY_CNT 5
 int qseecom_set_bandwidth(struct qseecom_handle *handle, bool high);
@@ -2487,14 +2494,22 @@ static int lkmauth(Elf_Ehdr *hdr, int len, int cnt)
 	lkmauth_req_t *kreq = NULL;
 	lkmauth_rsp_t *krsp = NULL;
 	int req_len = 0, rsp_len = 0;
-#ifdef CONFIG_LKMAUTH_SECONDWAY
+#ifdef CONFIG_64BIT
 	unsigned long long par;
 	unsigned long long virt_addr;
 	unsigned long long *pBuf = NULL;
 	unsigned long long *ptr;
+#else
+	unsigned int par;
+	unsigned int virt_addr;
+	unsigned int *pBuf = NULL;
+	unsigned int *ptr;
+#endif
+
 	unsigned int size;
 	unsigned long flags;
-#endif
+
+
 	mutex_lock(&lkmauth_mutex);
 	pr_warn("TIMA: lkmauth--launch the tzapp to check kernel module; module len is %d\n", len);
 
@@ -2524,10 +2539,9 @@ static int lkmauth(Elf_Ehdr *hdr, int len, int cnt)
 	 */
 	kreq = (struct lkmauth_req_s *)qhandle->sbuf;
 	kreq->cmd_id = LKMAUTH_CMD_AUTH;
+	kreq->module_len = len;
 #ifdef CONFIG_64BIT
 	pr_warn("TIMA: lkmauth -- hdr before kreq is : %lx\n", (unsigned long)hdr);
-	kreq->module_len = len;
-#ifdef CONFIG_LKMAUTH_SECONDWAY
 	virt_addr = (unsigned long)hdr;
 	size = ((len/PAGE_SIZE) + 2)*sizeof(pBuf);
 	pBuf = kmalloc(size, GFP_KERNEL);
@@ -2557,12 +2571,38 @@ static int lkmauth(Elf_Ehdr *hdr, int len, int cnt)
 	} while (len > 0);
 	kreq->module_addr_start = (unsigned long long)(virt_to_phys(pBuf));
 #else
-	kreq->module_addr_start = (unsigned long)hdr;
-#endif
-#else
 	pr_warn("TIMA: lkmauth -- hdr before kreq is : %x\n", (u32)hdr);
-	kreq->module_addr_start = (u32)hdr;
-	kreq->module_len = len;
+	virt_addr = (u32)hdr;
+	size = ((len/PAGE_SIZE) + 2)*sizeof(pBuf);
+	pBuf = kmalloc(size, GFP_KERNEL);
+
+	if (pBuf == NULL) {
+		printk("lkmauth: failed to allocate memory %d \n", size);
+		goto lkmauth_ret;
+	}
+	ptr = pBuf;
+	*ptr = LKM_MAGIC;
+	ptr++;
+
+	do {
+		spin_lock_irqsave(&lkm_va_to_pa_lock, flags);
+		__asm__	("mcr	p15, 0, %1, c7, c8, 0\n"
+		"isb\n"
+		"mrc 	p15, 0, %0, c7, c4, 0\n"
+		:"=r"(par):"r"(virt_addr));
+
+		spin_unlock_irqrestore(&lkm_va_to_pa_lock, flags);
+		if(par & 0x1) {
+			printk("failed to translate va: %x \n", virt_addr);
+			goto lkmauth_ret;
+		}
+		//fix last 12 bits
+		*ptr = (unsigned int)(par & PAGE_MASK);
+		len = len - PAGE_SIZE;
+		virt_addr = virt_addr + PAGE_SIZE;
+		ptr++;
+	} while (len > 0);
+	kreq->module_addr_start = (u32)(unsigned long)(virt_to_phys(pBuf));
 #endif
 
 	req_len = sizeof(lkmauth_req_t);
@@ -2658,10 +2698,9 @@ static int lkmauth(Elf_Ehdr *hdr, int len, int cnt)
 			qhandle = NULL;
 
 
-#ifdef CONFIG_LKMAUTH_SECONDWAY
 	if(pBuf)
 		kfree(pBuf);
-#endif
+
 	mutex_unlock(&lkmauth_mutex);
 	return ret;
 }
@@ -2739,13 +2778,18 @@ static inline void kmemleak_load_module(const struct module *mod,
 #endif
 
 #ifdef CONFIG_MODULE_SIG
-static int module_sig_check(struct load_info *info)
+static int module_sig_check(struct load_info *info, int flags)
 {
 	int err = -ENOKEY;
 	const unsigned long markerlen = sizeof(MODULE_SIG_STRING) - 1;
 	const void *mod = info->hdr;
 
-	if (info->len > markerlen &&
+	/*
+	 * Require flags == 0, as a module with version information
+	 * removed is no longer the module that was signed
+	 */
+	if (flags == 0 &&
+	    info->len > markerlen &&
 	    memcmp(mod + info->len - markerlen, MODULE_SIG_STRING, markerlen) == 0) {
 		/* We truncate the module to discard the signature */
 		info->len -= markerlen;
@@ -2764,7 +2808,7 @@ static int module_sig_check(struct load_info *info)
 	return err;
 }
 #else /* !CONFIG_MODULE_SIG */
-static int module_sig_check(struct load_info *info)
+static int module_sig_check(struct load_info *info, int flags)
 {
 	return 0;
 }
@@ -3542,7 +3586,7 @@ static int do_init_module(struct module *mod)
 	 *
 	 * http://thread.gmane.org/gmane.linux.kernel/1420814
 	 */
-	if (current->flags & PF_USED_ASYNC)
+	if (!mod->async_probe_requested && (current->flags & PF_USED_ASYNC))
 		async_synchronize_full();
 
 	mutex_lock(&module_mutex);
@@ -3669,10 +3713,18 @@ out:
 	return err;
 }
 
-static int unknown_module_param_cb(char *param, char *val, const char *modname)
+static int unknown_module_param_cb(char *param, char *val, const char *modname,
+				   void *arg)
 {
-	/* Check for magic 'dyndbg' arg */ 
-	int ret = ddebug_dyndbg_module_param_cb(param, val, modname);
+	struct module *mod = arg;
+	int ret;
+
+	if (strcmp(param, "async_probe") == 0) {
+		mod->async_probe_requested = true;
+		return 0;
+	}
+	/* Check for magic 'dyndbg' arg */
+	ret = ddebug_dyndbg_module_param_cb(param, val, modname);
 	if (ret != 0)
 		pr_warn("%s: unknown parameter '%s' ignored\n", modname, param);
 	return 0;
@@ -3690,7 +3742,7 @@ static int load_module(struct load_info *info, const char __user *uargs,
 	unsigned long module_len = info->len;
 #endif
 
-	err = module_sig_check(info);
+	err = module_sig_check(info, flags);
 	if (err)
 		goto free_copy;
 
@@ -3781,7 +3833,8 @@ static int load_module(struct load_info *info, const char __user *uargs,
 
 	/* Module is ready to execute: parsing args may do that. */
 	after_dashes = parse_args(mod->name, mod->args, mod->kp, mod->num_kp,
-				  -32768, 32767, unknown_module_param_cb);
+				  -32768, 32767, NULL,
+				  unknown_module_param_cb);
 	if (IS_ERR(after_dashes)) {
 		err = PTR_ERR(after_dashes);
 		goto bug_cleanup;

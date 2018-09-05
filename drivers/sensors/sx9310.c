@@ -36,6 +36,11 @@
 #include <linux/muic/muic_notifier.h>
 #endif
 
+#ifdef TAG
+#undef TAG
+#define TAG "[GRIP]"
+#endif
+
 #define VENDOR_NAME              "SEMTECH"
 #define MODEL_NAME               "SX9310"
 #define MODULE_NAME              "grip_sensor"
@@ -1590,7 +1595,7 @@ static int sx9310_probe(struct i2c_client *client,
 	}
 	disable_irq(data->irq);
 
-	ret = sensors_register(data->factory_device,
+	ret = sensors_register(&data->factory_device,
 		data, sensor_attrs, MODULE_NAME);
 	if (ret) {
 		SENSOR_ERR("cound not register sensor(%d).\n", ret);

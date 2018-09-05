@@ -10,6 +10,10 @@ extern int com_to_open_with_vbus(muic_data_t *pmuic);
 extern int com_to_usb(muic_data_t *pmuic);
 extern int com_to_uart(muic_data_t *pmuic);
 extern int com_to_audio(muic_data_t *pmuic);
+extern int com_to_uart_ap(muic_data_t *pmuic);
+#if defined(CONFIG_MUIC_UNIVERSAL_SM5705_AFC) && defined(CONFIG_MUIC_SUPPORT_CCIC)
+extern int cable_redetection(muic_data_t *pmuic);
+#endif
 extern int switch_to_ap_usb(muic_data_t *pmuic);
 extern int switch_to_ap_uart(muic_data_t *pmuic);
 extern int switch_to_cp_uart(muic_data_t *pmuic);
@@ -30,9 +34,17 @@ extern int attach_gamepad(muic_data_t *pmuic,
 			muic_attached_dev_t new_dev);
 extern int detach_gamepad(muic_data_t *pmuic);
 #if defined(CONFIG_MUIC_SUPPORT_EARJACK)
+extern void set_earjack_mode(muic_data_t *pmuic, int mode);
+extern void set_earjack_state(muic_data_t *pmuic, int intr1, int intr2, int btn1, int btn2);
+extern int get_attached_earjack_type(muic_data_t *pmuic);
 extern int attach_earjack(muic_data_t *pmuic,
 			muic_attached_dev_t new_dev);
 extern int detach_earjack(muic_data_t *pmuic);
+
+extern int attach_long_earjackkey(muic_data_t *pmuic,
+			muic_attached_dev_t new_dev);
+extern int detach_long_earjackkey(muic_data_t *pmuic,
+			muic_attached_dev_t new_dev);
 #endif
 extern int attach_deskdock(muic_data_t *pmuic,
 			muic_attached_dev_t new_dev);
@@ -57,4 +69,6 @@ extern void set_switch_mode(muic_data_t *pmuic, int mode);
 extern int get_switch_mode(muic_data_t *pmuic);
 extern void set_adc_scan_mode(muic_data_t *pmuic,const u8 val);
 extern int get_adc_scan_mode(muic_data_t *pmuic);
+extern int enable_chgdet(muic_data_t *pmuic, int enable);
+extern int run_chgdet(muic_data_t *pmuic, bool started);
 #endif

@@ -8,12 +8,18 @@
 #include <linux/highmem.h>
 #include <linux/io.h>
 #include <linux/types.h>
+#include <linux/slab.h>
 
 #ifdef CONFIG_TIMA_RKP
 #include <linux/rkp_entry.h>
 #endif
 
+#if defined(CONFIG_ARCH_MSM8953) && !defined(CONFIG_ARCH_MSM8917)
 #define DEBUG_LOG_START (0x85C00000)
+#elif defined(CONFIG_ARCH_MSM8917)
+#define DEBUG_LOG_START (0x86200000)
+#endif
+
 #define	DEBUG_LOG_SIZE	(1<<20)
 #define	DEBUG_LOG_MAGIC	(0xaabbccdd)
 #define	DEBUG_LOG_ENTRY_SIZE	128
@@ -50,26 +56,42 @@ unsigned long *tima_secure_rkp_log_addr = 0;
 
 ssize_t	tima_read(struct file *filep, char __user *buf, size_t size, loff_t *offset)
 {
-	/* First check is to get rid of integer overflow exploits */
-	if (size > DEBUG_LOG_SIZE || (*offset) + size > DEBUG_LOG_SIZE) {
-		printk(KERN_ERR"Extra read\n");
-		return -EINVAL;
-	}
-	if( !strcmp(filep->f_path.dentry->d_iname, "tima_debug_log"))
-		tima_log_addr = tima_debug_log_addr;
+    char *localbuf = NULL;
+
+    /* First check is to get rid of integer overflow exploits */
+    if (size > DEBUG_LOG_SIZE || (*offset) + size > DEBUG_LOG_SIZE) {
+        printk(KERN_ERR"Extra read\n");
+        return -EINVAL;
+    }
+
+    localbuf = kzalloc(size, GFP_KERNEL);
+    if(localbuf == NULL)
+        return -ENOMEM;
+
+    if( !strcmp(filep->f_path.dentry->d_iname, "tima_debug_log"))
+        tima_log_addr = tima_debug_log_addr;
 #ifdef CONFIG_TIMA_RKP
-	else if( !strcmp(filep->f_path.dentry->d_iname, "tima_debug_rkp_log"))
-		tima_log_addr = tima_debug_rkp_log_addr;
-	else
-		tima_log_addr = tima_secure_rkp_log_addr;
+    else if( !strcmp(filep->f_path.dentry->d_iname, "tima_debug_rkp_log"))
+        tima_log_addr = tima_debug_rkp_log_addr;
+    else if( !strcmp(filep->f_path.dentry->d_iname, "tima_secure_rkp_log"))
+        tima_log_addr = tima_secure_rkp_log_addr;
 #endif
-	if (copy_to_user(buf, (const char *)tima_log_addr + (*offset), size)) {
-		printk(KERN_ERR"Copy to user failed\n");
-		return -1;
-	} else {
-		*offset += size;
-		return size;
-	}
+    else {
+        printk(KERN_ERR"No tima*log\n");
+        kfree(localbuf);
+        return -1;
+    }
+
+    memcpy_fromio(localbuf, (const char *)tima_log_addr + (*offset), size);
+    if (copy_to_user(buf, localbuf, size)) {
+        printk(KERN_ERR"Copy to user failed\n");
+        kfree(localbuf);
+    return -1;
+    } else {
+        *offset += size;
+        kfree(localbuf);
+        return size;
+    }
 }
 
 static const struct file_operations tima_proc_fops = {

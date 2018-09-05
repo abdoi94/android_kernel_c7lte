@@ -480,7 +480,6 @@ long kgsl_ioctl_syncsource_create(struct kgsl_device_private *dev_priv,
 	idr_preload(GFP_KERNEL);
 	spin_lock(&private->syncsource_lock);
 	id = idr_alloc(&private->syncsource_idr, syncsource, 1, 0, GFP_NOWAIT);
-
 	if (id > 0) {
 		syncsource->id = id;
 		param->id = id;
@@ -488,6 +487,7 @@ long kgsl_ioctl_syncsource_create(struct kgsl_device_private *dev_priv,
 	} else {
 		ret = id;
 	}
+
 	spin_unlock(&private->syncsource_lock);
 	idr_preload_end();
 

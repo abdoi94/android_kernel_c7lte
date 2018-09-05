@@ -1,6 +1,7 @@
 obj-$(CONFIG_BATTERY_SAMSUNG)	+= sec_battery.o
 obj-$(CONFIG_MULTI_CHARGING)	+= sec_multi_charger.o
 obj-$(CONFIG_STEP_CHARGING)	    += sec_step_charging.o
+obj-$(CONFIG_BATTERY_CISD)	+= sec_cisd.o
 ifeq ($(CONFIG_OF),y)
 obj-$(CONFIG_ARCH_MSM)			+= sec_board-msm.o
 endif

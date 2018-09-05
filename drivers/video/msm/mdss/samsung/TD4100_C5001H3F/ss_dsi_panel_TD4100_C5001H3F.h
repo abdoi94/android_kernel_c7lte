@@ -33,9 +33,9 @@ Copyright (C) 2012, Samsung Electronics. All rights reserved.
 #define SS_DSI_PANEL_TD4100_C5001H3F_H
 
 #include "../ss_dsi_panel_common.h"
+#include "../ss_regulator_common.h"
 
 #define TD4100_C5001H3F_SUPPORT_PANEL_COUNT 1
 #define LCD_DEFAUL_BL_LEVEL 125
 
-extern void pwm_backlight_control(int enable);
 #endif

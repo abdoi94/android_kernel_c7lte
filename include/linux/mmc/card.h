@@ -17,6 +17,13 @@
 #include <linux/notifier.h>
 
 #define MMC_CARD_CMDQ_BLK_SIZE 512
+#define MAX_CNT_U64     0xFFFFFFFFFF
+#define MAX_CNT_U32     0x7FFFFFFF
+#define STATUS_MASK     (R1_ERROR | R1_CC_ERROR | R1_CARD_ECC_FAILED | R1_WP_VIOLATION | R1_OUT_OF_RANGE)
+#define HALT_UNHALT_ERR		0x00000001
+#define CQ_EN_DIS_ERR		0x00000010
+#define RPMB_SWITCH_ERR		0x00000100
+#define CQERR_MASK	(HALT_UNHALT_ERR | CQ_EN_DIS_ERR | RPMB_SWITCH_ERR)
 
 struct mmc_cid {
 	unsigned int		manfid;
@@ -125,12 +132,16 @@ struct mmc_ext_csd {
 	u8			raw_pwr_cl_ddr_52_360;	/* 239 */
 	u8			raw_pwr_cl_ddr_200_360;	/* 253 */
 	u8			cache_flush_policy;	/* 240 */
+#define MMC_BKOPS_URGENCY_MASK 0x3
 	u8			raw_bkops_status;	/* 246 */
 	u8			raw_sectors[4];		/* 212 - 4 bytes */
 	u8			cmdq_depth;		/* 307 */
 	u8			cmdq_support;		/* 308 */
 	u8			barrier_support;	/* 486 */
 	u8			barrier_en;
+	u8			pre_eol_info;		/* 267 */
+	u8			device_life_time_est_typ_a;	/* 268 */
+	u8			device_life_time_est_typ_b;	/* 269 */
 
 	u8			fw_version;		/* 254 */
 	unsigned int            feature_support;
@@ -358,6 +369,15 @@ struct mmc_card_error_log {
 	u64	first_issue_time;
 	u64	last_issue_time;
 	u32	count;
+        u32     ge_cnt;         // status[19] : general error or unknown error
+        u32     cc_cnt;         // status[20] : internal card controller error
+        u32     ecc_cnt;        // status[21] : ecc error
+        u32     wp_cnt;         // status[26] : write protection error
+	u32     oor_cnt;        // status[31] : out of range error
+	u32	halt_cnt;	// cq halt / unhalt fail
+	u32	cq_cnt;		// cq enable / disable fail
+	u32	rpmb_cnt;	// RPMB switch fail
+	u32	noti_cnt;       // uevent notification count
 };
 
 /*
@@ -454,7 +474,7 @@ struct mmc_card {
 	struct mmc_bkops_info bkops;
 
 	struct device_attribute error_count;
-	struct mmc_card_error_log err_log[8];
+	struct mmc_card_error_log err_log[10];
 };
 
 /*
@@ -748,4 +768,6 @@ extern struct mmc_wr_pack_stats *mmc_blk_get_packed_statistics(
 extern void mmc_blk_init_packed_statistics(struct mmc_card *card);
 extern int mmc_send_pon(struct mmc_card *card);
 extern void mmc_blk_cmdq_req_done(struct mmc_request *mrq);
+extern void mmc_cmdq_error_logging(struct mmc_card *card,
+		struct mmc_cmdq_req *cqrq, u32 status);
 #endif /* LINUX_MMC_CARD_H */

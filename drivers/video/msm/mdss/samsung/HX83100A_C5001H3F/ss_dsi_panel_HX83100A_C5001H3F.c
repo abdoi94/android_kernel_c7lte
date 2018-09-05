@@ -40,10 +40,6 @@ static int mdss_panel_on_pre(struct mdss_dsi_ctrl_pdata *ctrl)
 		return false;
 	}
 
-#if defined(CONFIG_SEC_INCELL)
-	if (incell_data.tsp_enable)
-		incell_data.tsp_enable(NULL);
-#endif
 	pr_info("%s %d\n", __func__, ctrl->ndx);
 
 	mdss_panel_attach_set(ctrl, true);
@@ -73,6 +69,8 @@ static int mdss_panel_off_pre(struct mdss_dsi_ctrl_pdata *ctrl)
 		pr_err("%s: Invalid data ctrl : 0x%zx vdd : 0x%zx", __func__, (size_t)ctrl, (size_t)vdd);
 		return false;
 	}
+	/* Disable PWM_EN */
+	ssreg_enable_blic(false);
 
 	pr_info("%s %d\n", __func__, ctrl->ndx);
 	return true;
@@ -87,10 +85,6 @@ static int mdss_panel_off_post(struct mdss_dsi_ctrl_pdata *ctrl)
 		return false;
 	}
 
-#if defined(CONFIG_SEC_INCELL)
-	if (incell_data.tsp_disable)
-		incell_data.tsp_disable(NULL);
-#endif
 	pr_info("%s %d\n", __func__, ctrl->ndx);
 
 	return true;
@@ -105,6 +99,10 @@ static void backlight_tft_late_on(struct mdss_dsi_ctrl_pdata *ctrl)
 		return;
 	}
 
+	if (mdss_panel_attached(ctrl->ndx))
+		ssreg_enable_blic(true);
+	else /* For PBA BOOTING */
+		ssreg_enable_blic(false);
 }
 
 static int mdss_panel_revision(struct mdss_dsi_ctrl_pdata *ctrl)
@@ -139,7 +137,7 @@ static struct dsi_panel_cmds * mdss_brightness_tft_pwm(struct mdss_dsi_ctrl_pdat
 
 static void mdss_panel_tft_outdoormode_update(struct mdss_dsi_ctrl_pdata *ctrl)
 {
-	
+
 }
 
 static void mdss_panel_init(struct samsung_display_driver_data *vdd)
@@ -148,8 +146,6 @@ static void mdss_panel_init(struct samsung_display_driver_data *vdd)
 
 	vdd->support_panel_max = HX83100A_C5001H3F_SUPPORT_PANEL_COUNT;
 	vdd->support_cabc = false;
-
-	vdd->support_mdnie_lite = false;
 
 	/* ON/OFF */
 	vdd->panel_func.samsung_panel_on_pre = mdss_panel_on_pre;
@@ -178,9 +174,6 @@ static void mdss_panel_init(struct samsung_display_driver_data *vdd)
 	vdd->panel_func.samsung_brightness_elvss_temperature2 = NULL;
 	vdd->panel_func.samsung_brightness_vint = NULL;
 	vdd->panel_func.samsung_brightness_gamma = NULL;
-
-	/* BLIC need to be controlled before panel reset*/
-	vdd->panel_func.samsung_panel_reset_control = isl98611_backlight_control;
 
 	vdd->brightness[0].brightness_packet_tx_cmds_dsi.link_state = DSI_HS_MODE;
 	vdd->mdss_panel_tft_outdoormode_update=mdss_panel_tft_outdoormode_update;

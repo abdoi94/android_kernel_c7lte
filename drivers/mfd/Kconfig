@@ -597,6 +597,20 @@ config MFD_SPMI_PMIC
 	  Say M here if you want to include support for the SPMI PMIC
 	  series as a module.  The module will be called "qcom-spmi-pmic".
 
+config MFD_I2C_PMIC
+	tristate "QTI I2C PMICs"
+	depends on OF
+	depends on I2C
+	select IRQ_DOMAIN
+	select REGMAP_I2C
+	help
+	  This enables support for controlling Qualcomm Technologies, Inc.
+	  PMICs over I2C. The driver controls interrupts, and provides register
+	  access for all of the device's peripherals.
+
+	  Say M here if you want to include support for the I2C PMIC series as
+	  a module. The module will be called "qcom-i2c-pmic".
+
 config MFD_RDC321X
 	tristate "RDC R-321x southbridge"
 	select MFD_CORE
@@ -1344,6 +1358,27 @@ config MFD_SM5705
           This driver provides common support for accessing the device;
           additional drivers
 
+config MFD_SM5708
+        bool "Siliconmitus SM5708 IFPM Support"
+        depends on I2C=y
+        select MFD_CORE
+        help
+          Say yes here to support for Siliconmitus SM5708.
+          This is a Power Management IC with USBLDO, RGB(SVC led), Dual Flash, Charger
+          controls on chip.
+          This driver provides common support for accessing the device;
+          additional drivers
+
+config MFD_S2MU004
+	bool "SAMSUNG S2MU004 IF PMIC Support"
+	depends on I2C=y
+	select MFD_CORE
+	help
+	  Support for the Samsung Electronics MFD series.
+	  This driver provides common support for accessing the device,
+	  additional drivers must be enabled in order to use the functionality
+	  of the device
+
 config MFD_S2MU005
 	bool "SAMSUNG Electronics IF PMIC Series Support"
 	depends on I2C=y
@@ -1360,6 +1395,18 @@ config LEDS_S2MU005_FLASH
 	 help
 	  A driver for Siliconmitus S2MU005 flash LED
 	  This option enables support for the LEDs on the S2MU005.
+
+config WCD9306_CODEC
+	tristate "WCD9306 Codec"
+	select SLIMBUS
+	select MFD_CORE
+	select REGMAP_ALLOW_WRITE_DEBUGFS
+	help
+	  Enables the WCD9xxx codec core driver. The core driver provides
+	  read/write capability to registers which are part of the
+	  WCD9306 core and gives the ability to use the WCD9306 codec.
+	  The WCD9306 codec support either I2C/I2S or Slimbus for
+	  control and data exchnage with master processor.
 
 config WCD9320_CODEC
 	tristate "WCD9320 Codec"

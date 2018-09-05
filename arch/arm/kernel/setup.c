@@ -60,6 +60,9 @@
 
 #include "atags.h"
 
+#ifdef CONFIG_SOC_BUS
+extern uint32_t socinfo_get_serial_number(void);
+#endif
 
 #if defined(CONFIG_FPE_NWFPE) || defined(CONFIG_FPE_FASTFPE)
 char fpe_type[8];
@@ -774,13 +777,21 @@ static int __init early_mem(char *p)
 }
 early_param("mem", early_mem);
 
+static int __init msm_hw_rev_setup(char *p)
+{
+	system_rev = memparse(p, NULL);
+	printk("androidboot.revision %x", system_rev);
+	return 0;
+}
+early_param("androidboot.revision", msm_hw_rev_setup);
+
 static void __init request_standard_resources(const struct machine_desc *mdesc)
 {
 	struct memblock_region *region;
 	struct resource *res;
 
 	kernel_code.start   = virt_to_phys(_text);
-	kernel_code.end     = virt_to_phys(_etext - 1);
+	kernel_code.end     = virt_to_phys(__init_begin - 1);
 	kernel_data.start   = virt_to_phys(_sdata);
 	kernel_data.end     = virt_to_phys(_end - 1);
 
@@ -954,12 +965,17 @@ void __init setup_arch(char **cmdline_p)
 
 	parse_early_param();
 
+	set_memsize_kernel_type(MEMSIZE_KERNEL_PAGING);
 	early_paging_init(mdesc, lookup_processor_type(read_cpuid_id()));
+	set_memsize_kernel_type(MEMSIZE_KERNEL_OTHERS);
 	setup_dma_zone(mdesc);
 	sanity_check_meminfo();
+	set_memsize_kernel_type(MEMSIZE_KERNEL_STOP);
 	arm_memblock_init(mdesc);
 
+	set_memsize_kernel_type(MEMSIZE_KERNEL_PAGING);
 	paging_init(mdesc);
+	set_memsize_kernel_type(MEMSIZE_KERNEL_OTHERS);
 	request_standard_resources(mdesc);
 
 	if (mdesc->restart)
@@ -1132,8 +1148,13 @@ static int c_show(struct seq_file *m, void *v)
 	else
 		seq_printf(m, "Hardware\t: %s\n", arch_read_hardware_id());
 	seq_printf(m, "Revision\t: %04x\n", system_rev);
+#ifdef CONFIG_SOC_BUS
+	seq_printf(m, "Serial\t\t: %u\n",
+		   socinfo_get_serial_number());
+#else
 	seq_printf(m, "Serial\t\t: %08x%08x\n",
 		   system_serial_high, system_serial_low);
+#endif
 	seq_printf(m, "Processor\t: %s rev %d (%s)\n",
 		   cpu_name, read_cpuid_id() & 15, elf_platform);
 

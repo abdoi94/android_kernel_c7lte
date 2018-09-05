@@ -52,17 +52,25 @@ struct sec_therm_info {
 #ifdef CONFIG_OF
 enum sec_thermistor_type {
 	TYPE_SEC_THREM_AP,	/* Close to AP */
+	TYPE_SEC_THREM_PA,	/* Close to PA */
+	TYPE_SEC_THREM_BK,	/* Close to BLANKET */
 	NR_TYPE_SEC_TERM
 };
 
 static const struct platform_device_id sec_thermistor_id[] = {
 	{ "sec-ap-thermistor", TYPE_SEC_THREM_AP },
+	{ "sec-pa-thermistor", TYPE_SEC_THREM_PA },
+	{ "sec-bk-thermistor", TYPE_SEC_THREM_BK },
 	{ },
 };
 
 static const struct of_device_id sec_therm_match[] = {
 	{ .compatible = "samsung,sec-ap-thermistor",
 		.data = &sec_thermistor_id[TYPE_SEC_THREM_AP] },
+	{ .compatible = "samsung,sec-pa-thermistor",
+		.data = &sec_thermistor_id[TYPE_SEC_THREM_PA] },
+	{ .compatible = "samsung,sec-bk-thermistor",
+		.data = &sec_thermistor_id[TYPE_SEC_THREM_BK] },
 	{ },
 };
 MODULE_DEVICE_TABLE(of, sec_therm_match);
@@ -91,6 +99,8 @@ sec_therm_parse_dt(struct platform_device *pdev)
 		return ERR_PTR(-ENOENT);
 
 	of_property_read_u32(np, "adc_channel", &channel);
+
+	pdata->use_mux_sel = !of_property_read_bool(np, "unused_mux_sel");
 
 	if (len1 != len2) {
 		dev_err(&pdev->dev, "%s: invalid array length(%u,%u)\n",
@@ -125,20 +135,31 @@ sec_therm_parse_dt(struct platform_device *pdev) { return NULL; }
 
 static int sec_therm_get_adc_data(struct sec_therm_info *info)
 {
-	int adc_data, adc_ch;
+	int adc_data, adc_ch, use_mux_sel;
 	int adc_max = 0, adc_min = 0, adc_total = 0, rc = 0;
 	int i;
 	struct qpnp_vadc_result result;
 
 	adc_ch = info->pdata->adc_channel;
+	use_mux_sel = info->pdata->use_mux_sel;
 
 	for (i = 0; i < ADC_SAMPLING_CNT; i++) {
 #if defined(CONFIG_SEC_MPP_SHARE)
-		sec_mpp_mux_control(AP_THM_MUX_SEL_NUM, SEC_MUX_SEL_AP_THM, 1);
+	if(use_mux_sel) {
+		if (!strcmp(info->name, "sec-ap-thermistor"))
+			sec_mpp_mux_control(AP_THM_MUX_SEL_NUM, SEC_MUX_SEL_AP_THM, 1);
+		else
+			sec_mpp_mux_control(BLKT_THM_MUX_SEL_NUM, SEC_MUX_SEL_BLKT_THM, 1);
+	}
 #endif
 		rc = qpnp_vadc_read(therm_vadc_dev, adc_ch, &result);
 #if defined(CONFIG_SEC_MPP_SHARE)
-		sec_mpp_mux_control(AP_THM_MUX_SEL_NUM, SEC_MUX_SEL_AP_THM, 0);
+	if(use_mux_sel) {
+		if (!strcmp(info->name, "sec-ap-thermistor"))
+			sec_mpp_mux_control(AP_THM_MUX_SEL_NUM, SEC_MUX_SEL_AP_THM, 0);
+		else
+			sec_mpp_mux_control(BLKT_THM_MUX_SEL_NUM, SEC_MUX_SEL_BLKT_THM, 0);
+	}
 #endif
 
 		if (rc) {
@@ -328,13 +349,15 @@ static int sec_therm_probe(struct platform_device *pdev)
 
 	switch (pdev_id->driver_data) {
 	case TYPE_SEC_THREM_AP:
+	case TYPE_SEC_THREM_PA:
+	case TYPE_SEC_THREM_BK:
 		/* Allow only a single device instance for each device type */
 		if (sec_therm_single_inst[pdev_id->driver_data])
 			return -EPERM;
 		else
 			sec_therm_single_inst[pdev_id->driver_data] = true;
 
-		info->dev = sec_device_create(0, info, "sec-thermistor");
+		info->dev = sec_device_create(0, info, pdev_id->name);
 		if (IS_ERR(info->dev)) {
 			dev_err(&pdev->dev, "%s: fail to create sec_dev\n",
 					__func__);

@@ -1,4 +1,4 @@
-/* Copyright (c) 2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -89,20 +89,27 @@
 /* response mode error mask */
 #define CQRMEM		0x50
 #define CQ_EXCEPTION	(1 << 6)
+/* write protection violation */
+#define WP_ERASE_SKIP	(1 << 15)
+#define WP_VIOLATION	(1 << 26)
 
 /* task error info */
 #define CQTERRI		0x54
 
 /* CQTERRI bit fields */
-#define CQ_RMECI	0x1F
+#define CQ_RMECI        0x3F
 #define CQ_RMETI	(0x1F << 8)
 #define CQ_RMEFV	(1 << 15)
 #define CQ_DTECI	(0x3F << 16)
 #define CQ_DTETI	(0x1F << 24)
 #define CQ_DTEFV	(1 << 31)
 
+#define GET_CMD_ERR_IDX(__r__) (__r__ & CQ_RMECI)
 #define GET_CMD_ERR_TAG(__r__) ((__r__ & CQ_RMETI) >> 8)
+#define GET_DAT_ERR_IDX(__r__) ((__r__ & CQ_DTECI) >> 16)
 #define GET_DAT_ERR_TAG(__r__) ((__r__ & CQ_DTETI) >> 24)
+#define GET_CMD_ERR_CMD(__r__) (__r__ & 0x3F)
+#define GET_DAT_ERR_CMD(__r__) ((__r__ & 0x3F0000) >> 16)
 
 /* command response index */
 #define CQCRI		0x58
@@ -147,6 +154,8 @@
 struct task_history {
 	u64 task;
 	bool is_dcmd;
+        u32 tag;
+        ktime_t issue_time;
 };
 
 struct cmdq_host {
@@ -197,7 +206,7 @@ struct cmdq_host {
 };
 
 struct cmdq_host_ops {
-	void (*set_tranfer_params)(struct mmc_host *mmc);
+	void (*set_transfer_params)(struct mmc_host *mmc);
 	void (*set_data_timeout)(struct mmc_host *mmc, u32 val);
 	void (*clear_set_irqs)(struct mmc_host *mmc, bool clear);
 	void (*set_block_size)(struct mmc_host *mmc);

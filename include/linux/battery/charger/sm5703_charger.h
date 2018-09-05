@@ -21,6 +21,13 @@ enum {
 	CHG_REGS,
 };
 
+enum {
+    SM5703_TOPOFF_TIMER_10m         = 0x0,
+    SM5703_TOPOFF_TIMER_20m         = 0x1,
+    SM5703_TOPOFF_TIMER_30m         = 0x2,
+    SM5703_TOPOFF_TIMER_45m         = 0x3,
+};
+
 #define SM5703_CNTL				    0x0C
 #define SM5703_VBUSCNTL				0x0D
 #define SM5703_CHGCNTL1				0x0E
@@ -64,6 +71,10 @@ enum {
 #define SM5703_AUTOSTOP             0x1
 #define SM5703_AUTOSTOP_MASK        (1 << 7)
 
+#define SM5703_TOPOFF_TIMER		0x3
+#define SM5703_TOPOFF_TIMER_MASK	0x60
+#define SM5703_TOPOFF_TIMER_SHIFT	0x5
+
 #define SM5703_AICLEN               0x1
 #define SM5703_AICLEN_MASK          (1 << 7)
 
@@ -94,10 +105,26 @@ enum {
 #define SM5703_OTGCURRENT               0x03
 #define SM5703_OTGCURRENT_MASK          0x03
 
+#define SM5703_OTGCURRENT_0P5A          0x00
+#define SM5703_OTGCURRENT_0P7A          0x01
+#define SM5703_OTGCURRENT_0P9A          0x02
+#define SM5703_OTGCURRENT_1P2A          0x03
+
 #define SM5703_FREQSEL_3MHZ             0x0
 #define SM5703_FREQSEL_2P4MHZ           0x1
 #define SM5703_FREQSEL_1P5MHZ           0x2
 #define SM5703_FREQSEL_1P8MHZ           0x3
+
+#define SM5703_DISLIMIT_MASK            0x07
+#define SM5703_DISLIMIT_SHIFT           0x00
+
+#define SM5703_DISLIMIT_2A              0x1
+#define SM5703_DISLIMIT_2P5A            0x2
+#define SM5703_DISLIMIT_3A              0x3
+#define SM5703_DISLIMIT_3P5A            0x4
+#define SM5703_DISLIMIT_4A              0x5
+#define SM5703_DISLIMIT_4P5A            0x6
+#define SM5703_DISLIMIT_5A              0x7
 
 #define SM5703_BST_IQ3LIMIT_0P7X        0x0
 #define SM5703_BST_IQ3LIMIT_1X          0x1
@@ -106,9 +133,13 @@ enum {
 
 #define REDUCE_CURRENT_STEP				100
 #define MINIMUM_INPUT_CURRENT			300
-#define SLOW_CHARGING_CURRENT_STANDARD	999
+#define SLOW_CHARGING_CURRENT_STANDARD	400
 
+#define ENABLE 1
+#define DISABLE 0
+
+extern bool sec_bat_get_slate_mode(void);
 extern sec_battery_platform_data_t sec_battery_pdata;
-
+extern int poweroff_charging;
 
 #endif /*SM5703_CHARGER_H*/

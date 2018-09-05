@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2016, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -21,8 +21,33 @@
 #include <linux/mutex.h>
 #include <linux/rwsem.h>
 #include <net/cnss.h>
-#include <net/cnss_common.h>
+#include "cnss_common.h"
 #include <net/cfg80211.h>
+
+#define AR6320_REV1_VERSION             0x5000000
+#define AR6320_REV1_1_VERSION           0x5000001
+#define AR6320_REV1_3_VERSION           0x5000003
+#define AR6320_REV2_1_VERSION           0x5010000
+#define AR6320_REV3_VERSION             0x5020000
+#define AR6320_REV3_2_VERSION           0x5030000
+#define AR900B_DEV_VERSION              0x1000000
+#define QCA9377_REV1_1_VERSION          0x5020001
+
+static struct cnss_fw_files FW_FILES_QCA6174_FW_1_1 = {
+	"qwlan11.bin", "bdwlan11.bin", "otp11.bin", "utf11.bin",
+	"utfbd11.bin", "epping11.bin", "evicted11.bin"};
+static struct cnss_fw_files FW_FILES_QCA6174_FW_2_0 = {
+	"qwlan20.bin", "bdwlan20.bin", "otp20.bin", "utf20.bin",
+	"utfbd20.bin", "epping20.bin", "evicted20.bin"};
+static struct cnss_fw_files FW_FILES_QCA6174_FW_1_3 = {
+	"qwlan13.bin", "bdwlan13.bin", "otp13.bin", "utf13.bin",
+	"utfbd13.bin", "epping13.bin", "evicted13.bin"};
+static struct cnss_fw_files FW_FILES_QCA6174_FW_3_0 = {
+	"qwlan30.bin", "bdwlan30.bin", "otp30.bin", "utf30.bin",
+	"utfbd30.bin", "epping30.bin", "evicted30.bin"};
+static struct cnss_fw_files FW_FILES_DEFAULT = {
+	"qwlan.bin", "bdwlan.bin", "otp.bin", "utf.bin",
+	"utfbd.bin", "epping.bin", "evicted.bin"};
 
 enum cnss_dev_bus_type {
 	CNSS_BUS_NONE = -1,
@@ -43,22 +68,23 @@ static struct cnss_dfs_nol_info {
 	u16 dfs_nol_info_len;
 } dfs_nol_info;
 
+static enum cnss_cc_src cnss_cc_source = CNSS_SOURCE_CORE;
+
 int cnss_set_wlan_unsafe_channel(u16 *unsafe_ch_list, u16 ch_count)
 {
-	struct cnss_unsafe_channel_list *unsafe_list;
-
 	mutex_lock(&unsafe_channel_list_lock);
-	if ((!unsafe_ch_list) || (!ch_count) || (ch_count > CNSS_MAX_CH_NUM)) {
+	if ((!unsafe_ch_list) || (ch_count > CNSS_MAX_CH_NUM)) {
 		mutex_unlock(&unsafe_channel_list_lock);
 		return -EINVAL;
 	}
 
-	unsafe_list = &unsafe_channel_list;
 	unsafe_channel_list.unsafe_ch_count = ch_count;
 
-	memcpy(
-		(char *)unsafe_list->unsafe_ch_list,
-		(char *)unsafe_ch_list, ch_count * sizeof(u16));
+	if (ch_count != 0) {
+		memcpy(
+			(char *)unsafe_channel_list.unsafe_ch_list,
+			(char *)unsafe_ch_list, ch_count * sizeof(u16));
+	}
 	mutex_unlock(&unsafe_channel_list_lock);
 
 	return 0;
@@ -69,25 +95,22 @@ int cnss_get_wlan_unsafe_channel(
 			u16 *unsafe_ch_list,
 			u16 *ch_count, u16 buf_len)
 {
-	struct cnss_unsafe_channel_list *unsafe_list;
-
 	mutex_lock(&unsafe_channel_list_lock);
 	if (!unsafe_ch_list || !ch_count) {
 		mutex_unlock(&unsafe_channel_list_lock);
 		return -EINVAL;
 	}
 
-	unsafe_list = &unsafe_channel_list;
-	if (buf_len < (unsafe_list->unsafe_ch_count * sizeof(u16))) {
+	if (buf_len < (unsafe_channel_list.unsafe_ch_count * sizeof(u16))) {
 		mutex_unlock(&unsafe_channel_list_lock);
 		return -ENOMEM;
 	}
 
-	*ch_count = unsafe_list->unsafe_ch_count;
+	*ch_count = unsafe_channel_list.unsafe_ch_count;
 	memcpy(
 		(char *)unsafe_ch_list,
-		(char *)unsafe_list->unsafe_ch_list,
-		unsafe_list->unsafe_ch_count * sizeof(u16));
+		(char *)unsafe_channel_list.unsafe_ch_list,
+		unsafe_channel_list.unsafe_ch_count * sizeof(u16));
 	mutex_unlock(&unsafe_channel_list_lock);
 
 	return 0;
@@ -242,33 +265,31 @@ void cnss_dump_stack(struct task_struct *task)
 }
 EXPORT_SYMBOL(cnss_dump_stack);
 
-enum cnss_dev_bus_type cnss_get_dev_bus_type(struct device *dev)
+struct cnss_dev_platform_ops *cnss_get_platform_ops(struct device *dev)
 {
-	if (!dev && !dev->bus)
-		return CNSS_BUS_NONE;
-
-	if (memcmp(dev->bus->name, "sdio", 4) == 0)
-		return CNSS_BUS_SDIO;
-	else if (memcmp(dev->bus->name, "pci", 3) == 0)
-		return CNSS_BUS_PCI;
+	if (!dev)
+		return NULL;
 	else
-		return CNSS_BUS_NONE;
+		return dev->platform_data;
 }
 
-#ifdef CONFIG_CNSS_SDIO
 int cnss_common_request_bus_bandwidth(struct device *dev, int bandwidth)
 {
-	if (CNSS_BUS_SDIO == cnss_get_dev_bus_type(dev))
-		return cnss_sdio_request_bus_bandwidth(bandwidth);
+	struct cnss_dev_platform_ops *pf_ops = cnss_get_platform_ops(dev);
+
+	if (pf_ops && pf_ops->request_bus_bandwidth)
+		return pf_ops->request_bus_bandwidth(bandwidth);
 	else
-		return 0;
+		return -EINVAL;
 }
 EXPORT_SYMBOL(cnss_common_request_bus_bandwidth);
 
 void *cnss_common_get_virt_ramdump_mem(struct device *dev, unsigned long *size)
 {
-	if (CNSS_BUS_SDIO == cnss_get_dev_bus_type(dev))
-		return cnss_sdio_get_virt_ramdump_mem(size);
+	struct cnss_dev_platform_ops *pf_ops = cnss_get_platform_ops(dev);
+
+	if (pf_ops && pf_ops->get_virt_ramdump_mem)
+		return pf_ops->get_virt_ramdump_mem(size);
 	else
 		return NULL;
 }
@@ -276,29 +297,37 @@ EXPORT_SYMBOL(cnss_common_get_virt_ramdump_mem);
 
 void cnss_common_device_self_recovery(struct device *dev)
 {
-	if (CNSS_BUS_SDIO == cnss_get_dev_bus_type(dev))
-		cnss_sdio_device_self_recovery();
+	struct cnss_dev_platform_ops *pf_ops = cnss_get_platform_ops(dev);
+
+	if (pf_ops && pf_ops->device_self_recovery)
+		pf_ops->device_self_recovery();
 }
 EXPORT_SYMBOL(cnss_common_device_self_recovery);
 
 void cnss_common_schedule_recovery_work(struct device *dev)
 {
-	if (CNSS_BUS_SDIO == cnss_get_dev_bus_type(dev))
-		cnss_sdio_schedule_recovery_work();
+	struct cnss_dev_platform_ops *pf_ops = cnss_get_platform_ops(dev);
+
+	if (pf_ops && pf_ops->schedule_recovery_work)
+		pf_ops->schedule_recovery_work();
 }
 EXPORT_SYMBOL(cnss_common_schedule_recovery_work);
 
 void cnss_common_device_crashed(struct device *dev)
 {
-	if (CNSS_BUS_SDIO == cnss_get_dev_bus_type(dev))
-		cnss_sdio_device_crashed();
+	struct cnss_dev_platform_ops *pf_ops = cnss_get_platform_ops(dev);
+
+	if (pf_ops && pf_ops->device_crashed)
+		pf_ops->device_crashed();
 }
 EXPORT_SYMBOL(cnss_common_device_crashed);
 
 u8 *cnss_common_get_wlan_mac_address(struct device *dev, uint32_t *num)
 {
-	if (CNSS_BUS_SDIO == cnss_get_dev_bus_type(dev))
-		return cnss_sdio_get_wlan_mac_address(num);
+	struct cnss_dev_platform_ops *pf_ops = cnss_get_platform_ops(dev);
+
+	if (pf_ops && pf_ops->get_wlan_mac_address)
+		return pf_ops->get_wlan_mac_address(num);
 	else
 		return NULL;
 }
@@ -307,70 +336,115 @@ EXPORT_SYMBOL(cnss_common_get_wlan_mac_address);
 int cnss_common_set_wlan_mac_address(
 		struct device *dev, const u8 *in, uint32_t len)
 {
-	if (CNSS_BUS_SDIO == cnss_get_dev_bus_type(dev))
-		return cnss_sdio_set_wlan_mac_address(in, len);
+	struct cnss_dev_platform_ops *pf_ops = cnss_get_platform_ops(dev);
+
+	if (pf_ops && pf_ops->set_wlan_mac_address)
+		return pf_ops->set_wlan_mac_address(in, len);
 	else
 		return -EINVAL;
 }
 EXPORT_SYMBOL(cnss_common_set_wlan_mac_address);
-#endif
 
-#ifdef CONFIG_CNSS_PCI
-int cnss_common_request_bus_bandwidth(struct device *dev, int bandwidth)
+int cnss_power_up(struct device *dev)
 {
-	if (CNSS_BUS_PCI == cnss_get_dev_bus_type(dev))
-		return cnss_pci_request_bus_bandwidth(bandwidth);
-	else
-		return 0;
-}
-EXPORT_SYMBOL(cnss_common_request_bus_bandwidth);
+	struct cnss_dev_platform_ops *pf_ops = cnss_get_platform_ops(dev);
 
-void *cnss_common_get_virt_ramdump_mem(struct device *dev, unsigned long *size)
-{
-	if (CNSS_BUS_PCI == cnss_get_dev_bus_type(dev))
-		return cnss_pci_get_virt_ramdump_mem(size);
-	else
-		return NULL;
-}
-EXPORT_SYMBOL(cnss_common_get_virt_ramdump_mem);
-
-void cnss_common_device_self_recovery(struct device *dev)
-{
-	if (CNSS_BUS_PCI == cnss_get_dev_bus_type(dev))
-		cnss_pci_device_self_recovery();
-}
-EXPORT_SYMBOL(cnss_common_device_self_recovery);
-
-void cnss_common_schedule_recovery_work(struct device *dev)
-{
-	if (CNSS_BUS_PCI == cnss_get_dev_bus_type(dev))
-		cnss_pci_schedule_recovery_work();
-}
-EXPORT_SYMBOL(cnss_common_schedule_recovery_work);
-
-void cnss_common_device_crashed(struct device *dev)
-{
-	if (CNSS_BUS_PCI == cnss_get_dev_bus_type(dev))
-		cnss_pci_device_crashed();
-}
-EXPORT_SYMBOL(cnss_common_device_crashed);
-
-u8 *cnss_common_get_wlan_mac_address(struct device *dev, uint32_t *num)
-{
-	if (CNSS_BUS_PCI == cnss_get_dev_bus_type(dev))
-		return cnss_pci_get_wlan_mac_address(num);
-	else
-		return NULL;
-}
-EXPORT_SYMBOL(cnss_common_get_wlan_mac_address);
-
-int cnss_common_set_wlan_mac_address(
-		struct device *dev, const u8 *in, uint32_t len)
-{
-	if (CNSS_BUS_PCI == cnss_get_dev_bus_type(dev))
-		return cnss_pcie_set_wlan_mac_address(in, len);
+	if (pf_ops && pf_ops->power_up)
+		return pf_ops->power_up(dev);
 	else
 		return -EINVAL;
 }
-EXPORT_SYMBOL(cnss_common_set_wlan_mac_address);
-#endif
+EXPORT_SYMBOL(cnss_power_up);
+
+int cnss_power_down(struct device *dev)
+{
+	struct cnss_dev_platform_ops *pf_ops = cnss_get_platform_ops(dev);
+
+	if (pf_ops && pf_ops->power_down)
+		return pf_ops->power_down(dev);
+	else
+		return -EINVAL;
+}
+EXPORT_SYMBOL(cnss_power_down);
+
+void cnss_get_qca9377_fw_files(struct cnss_fw_files *pfw_files,
+			       u32 size, u32 tufello_dual_fw)
+{
+	if (tufello_dual_fw)
+		memcpy(pfw_files, &FW_FILES_DEFAULT, sizeof(*pfw_files));
+	else
+		memcpy(pfw_files, &FW_FILES_QCA6174_FW_3_0, sizeof(*pfw_files));
+}
+EXPORT_SYMBOL(cnss_get_qca9377_fw_files);
+
+int cnss_get_fw_files_for_target(struct cnss_fw_files *pfw_files,
+				 u32 target_type, u32 target_version)
+{
+	if (!pfw_files)
+		return -ENODEV;
+
+	switch (target_version) {
+	case AR6320_REV1_VERSION:
+	case AR6320_REV1_1_VERSION:
+		memcpy(pfw_files, &FW_FILES_QCA6174_FW_1_1, sizeof(*pfw_files));
+		break;
+	case AR6320_REV1_3_VERSION:
+		memcpy(pfw_files, &FW_FILES_QCA6174_FW_1_3, sizeof(*pfw_files));
+		break;
+	case AR6320_REV2_1_VERSION:
+		memcpy(pfw_files, &FW_FILES_QCA6174_FW_2_0, sizeof(*pfw_files));
+		break;
+	case AR6320_REV3_VERSION:
+	case AR6320_REV3_2_VERSION:
+		memcpy(pfw_files, &FW_FILES_QCA6174_FW_3_0, sizeof(*pfw_files));
+		break;
+	default:
+		memcpy(pfw_files, &FW_FILES_DEFAULT, sizeof(*pfw_files));
+		pr_err("%s default version 0x%X 0x%X", __func__,
+		       target_type, target_version);
+		break;
+	}
+	return 0;
+}
+EXPORT_SYMBOL(cnss_get_fw_files_for_target);
+
+void cnss_set_cc_source(enum cnss_cc_src cc_source)
+{
+	cnss_cc_source = cc_source;
+}
+EXPORT_SYMBOL(cnss_set_cc_source);
+
+enum cnss_cc_src cnss_get_cc_source(void)
+{
+	return cnss_cc_source;
+}
+EXPORT_SYMBOL(cnss_get_cc_source);
+
+const char *cnss_wlan_get_evicted_data_file(void)
+{
+	return FW_FILES_QCA6174_FW_3_0.evicted_data;
+}
+
+int cnss_common_register_tsf_captured_handler(struct device *dev,
+					      irq_handler_t handler, void *ctx)
+{
+	struct cnss_dev_platform_ops *pf_ops = cnss_get_platform_ops(dev);
+
+	if (pf_ops && pf_ops->register_tsf_captured_handler)
+		return pf_ops->register_tsf_captured_handler(handler, ctx);
+	else
+		return -EINVAL;
+}
+EXPORT_SYMBOL(cnss_common_register_tsf_captured_handler);
+
+int cnss_common_unregister_tsf_captured_handler(struct device *dev,
+						void *ctx)
+{
+	struct cnss_dev_platform_ops *pf_ops = cnss_get_platform_ops(dev);
+
+	if (pf_ops && pf_ops->unregister_tsf_captured_handler)
+		return pf_ops->unregister_tsf_captured_handler(ctx);
+	else
+		return -EINVAL;
+}
+EXPORT_SYMBOL(cnss_common_unregister_tsf_captured_handler);

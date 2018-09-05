@@ -642,11 +642,18 @@ int sps_bam_reset(struct sps_bam *dev)
 		      pipe_index++) {
 			pipe = dev->pipes[pipe_index];
 			if (BAM_PIPE_IS_ASSIGNED(pipe)) {
-				SPS_ERR(dev,
-					"sps:BAM device %pa RESET failed: pipe %d in use\n",
+				if (!(dev->props.options &
+							SPS_BAM_FORCE_RESET)) {
+					SPS_ERR(dev,
+						"sps:BAM device %pa RESET failed: pipe %d in use\n",
+						BAM_ID(dev), pipe_index);
+					result = SPS_ERROR;
+					break;
+				}
+
+				SPS_DBG2(dev,
+					"sps: BAM %pa is force reset with pipe %d in use\n",
 					BAM_ID(dev), pipe_index);
-				result = SPS_ERROR;
-				break;
 			}
 		}
 
@@ -1083,6 +1090,7 @@ int sps_bam_pipe_disconnect(struct sps_bam *dev, u32 pipe_index)
 {
 	struct sps_pipe *pipe;
 	int result;
+	unsigned long flags;
 
 	if (pipe_index >= dev->props.num_pipes) {
 		SPS_ERR(dev, "sps:Invalid BAM %pa pipe: %d\n", BAM_ID(dev),
@@ -1094,8 +1102,10 @@ int sps_bam_pipe_disconnect(struct sps_bam *dev, u32 pipe_index)
 	pipe = dev->pipes[pipe_index];
 	if (BAM_PIPE_IS_ASSIGNED(pipe)) {
 		if ((dev->pipe_active_mask & (1UL << pipe_index))) {
+			spin_lock_irqsave(&dev->isr_lock, flags);
 			list_del(&pipe->list);
 			dev->pipe_active_mask &= ~(1UL << pipe_index);
+			spin_unlock_irqrestore(&dev->isr_lock, flags);
 		}
 		dev->pipe_remote_mask &= ~(1UL << pipe_index);
 		if (pipe->connect.options & SPS_O_NO_DISABLE)

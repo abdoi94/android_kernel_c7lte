@@ -36,6 +36,16 @@
 /* definitions */
 #define	SEC_SIZEOF_POWER_SUPPLY_TYPE	POWER_SUPPLY_TYPE_MAX
 
+enum power_supply_ext_property {
+	POWER_SUPPLY_EXT_PROP_AICL_CURRENT = POWER_SUPPLY_PROP_MAX,
+};
+
+enum sec_battery_usb_conf {
+	USB_CURRENT_UNCONFIGURED = 100,
+	USB_CURRENT_HIGH_SPEED = 500,
+	USB_CURRENT_SUPER_SPEED = 900,
+};
+
 enum sec_battery_voltage_mode {
 	/* average voltage */
 	SEC_BATTERY_VOLTAGE_AVERAGE = 0,
@@ -63,6 +73,8 @@ enum sec_battery_capacity_mode {
 	SEC_BATTERY_CAPACITY_AGEDCELL,
 	/* charge count */
 	SEC_BATTERY_CAPACITY_CYCLE,
+	/* full capacity rep */
+	SEC_BATTERY_CAPACITY_FULL,
 };
 
 enum sec_wireless_info_mode {
@@ -573,8 +585,11 @@ struct sec_battery_platform_data {
 	/* battery swelling */
 	int swelling_high_temp_block;
 	int swelling_high_temp_recov;
-	int swelling_low_temp_block;
-	int swelling_low_temp_recov;
+	int swelling_low_temp_block_1st;
+	int swelling_low_temp_recov_1st;
+	int swelling_low_temp_block_2nd;
+	int swelling_low_temp_recov_2nd;
+	int swelling_low_temp_2step_mode;
 	int swelling_full_check_current_2nd;
 	unsigned int swelling_low_temp_current;
 	unsigned int swelling_low_temp_topoff;
@@ -582,6 +597,7 @@ struct sec_battery_platform_data {
 	unsigned int swelling_high_temp_topoff;
 	unsigned int swelling_normal_float_voltage;
 	unsigned int swelling_drop_float_voltage;
+	unsigned int swelling_float_voltage_margin;
 	unsigned int swelling_high_rechg_voltage;
 	unsigned int swelling_low_rechg_voltage;
 
@@ -753,6 +769,10 @@ struct sec_battery_platform_data {
 	/* reset charging for abnormal malfunction (0: not use) */
 	unsigned long charging_reset_time;
 
+	unsigned int hv_charging_total_time;
+	unsigned int normal_charging_total_time;
+	unsigned int usb_charging_total_time;
+
 	/* fuel gauge */
 	char *fuelgauge_name;
 	int fg_irq;
@@ -815,6 +835,19 @@ struct sec_battery_platform_data {
 	bool fake_capacity;
 
 	int p_mux_channel;
+	int batt_channel;
+
+#if defined(CONFIG_BATTERY_CISD)
+	unsigned int battery_full_capacity;
+	unsigned int cisd_cap_high_thr;
+	unsigned int cisd_cap_low_thr;
+	unsigned int cisd_cap_limit;
+	int full_chg_current_margin;
+#endif
+
+	unsigned int expired_time;
+	unsigned int recharging_expired_time;
+	int standard_curr;
 
 	/* ADC setting */
 	unsigned int adc_check_count;

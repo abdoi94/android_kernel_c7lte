@@ -36,7 +36,13 @@
 #include <linux/workqueue.h>
 #include <linux/slab.h>
 
+#if defined(CONFIG_BATTERY_SAMSUNG_V2)
+#include "../../../drivers/battery_v2/include/sec_charging_common.h"
+#elif defined(CONFIG_BATTERY_SAMSUNG_V2_LEGACY)
+#include "../../../drivers/battery_v2_legacy/include/sec_charging_common.h"
+#else
 #include <linux/battery/sec_charging_common.h>
+#endif
 
 #define SM5703_DRV_VER "0.0.1"
 
